@@ -14,6 +14,7 @@ import time
 import threading
 from queue import Queue, Empty
 import re
+import json
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -24,6 +25,13 @@ MEDIA_EXTENSIONS = {'.mp4', '.mkv', '.ts', '.iso', '.rmvb', '.avi', '.mov',
 
 # 常见的元数据/刮削文件后缀
 META_EXTENSIONS = {'.nfo', '.jpg', '.png', '.xml', '.bif', '.json'}
+
+# 莫兰迪色系 (用于UI渲染)
+MORANDI_RED = "#E6B0AA"    
+MORANDI_BLUE = "#AED6F1"   
+MORANDI_GREEN = "#A9DFBF"  
+MORANDI_GREY = "#D7DBDD"   
+MORANDI_PURPLE = "#D2B4DE" 
 
 class StrmFileHandler(FileSystemEventHandler):
     def __init__(self, queue: Queue):
@@ -38,9 +46,9 @@ class StrmFileHandler(FileSystemEventHandler):
 class StrmDeLocal(_PluginBase):
     plugin_id = "StrmDeLocal"
     plugin_name = "STRM本地媒体资源清理"
-    plugin_desc = "探测STRM入库，自动核对并清理本地媒体资源"
+    plugin_desc = "探测STRM入库，自动关联并清理本地源文件、种子及刮削数据"
     plugin_icon = ""
-    plugin_version = "1.0"
+    plugin_version = "1.1.2"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -60,7 +68,7 @@ class StrmDeLocal(_PluginBase):
         return bool(value)
 
     def init_plugin(self, config: dict = None):
-        logger.info("插件初始化中 (V1.0)...")
+        logger.info("插件初始化中 (V1.1.2)...")
         if not config: config = self.get_config() or {}
         self._enabled = self._to_bool(config.get("enabled", False))
         mappings = config.get("path_mappings") or ""
@@ -85,6 +93,14 @@ class StrmDeLocal(_PluginBase):
             deep = "开启" if self._deep_search else "关闭"
             info = f"当前配置: 模式={mode} | 通知={notify} | 冷却={self._notify_interval}s | 映射={len(self._path_mappings)}条 | 深度查找={deep}"
             logger.info(info)
+            
+            # --- V1.1.1 修复: 增加路径检查日志 ---
+            for mapping in self._path_mappings:
+                 if ":" in mapping:
+                     strm_path = mapping.split(":")[0].strip()
+                     if not Path(strm_path).exists():
+                         logger.warning(f"配置警告: 监控路径不存在 -> {strm_path}")
+            
             self.stop_service()
             self.start_service()
         else:
@@ -129,7 +145,7 @@ class StrmDeLocal(_PluginBase):
             {'component': 'VRow', 'content': [
                 {'component': 'VCol', 'props': {'cols': 12}, 'content': [
                     {'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal', 
-                        'text': '本插件通过探测 STRM 入库事件，自动核对并清理对应的本地媒体文件。默认处于【执行清理】模式，会物理删除文件。'}},
+                        'text': '本插件通过探测 STRM 文件入库，自动关联并清理对应的本地源文件（支持物理删除配置）。'}},
                 ]}
             ]},
             {'component': 'VRow', 'content': [
@@ -211,14 +227,85 @@ class StrmDeLocal(_PluginBase):
         self.post_message(mtype=NotificationType.SiteMessage, title=title, text=text)
 
     def get_page(self) -> List[dict]:
+        """
+        V1.1.2 页面重构
+        1. 移除顶部监控面板 (响应用户反馈)
+        2. 保留优化后的历史记录列表 (莫兰迪配色 + 分类统计)
+        """
         historys = self.get_data('history') or []
-        res = []
+        history_cards = []
+        
         for h in sorted(historys, key=lambda x: x.get('time'), reverse=True):
-             res.append({'component': 'VCard', 'props': {'variant': 'outlined', 'class': 'mb-2'}, 'content': [
-                 {'component': 'VCardTitle', 'text': f"{h.get('title')} [{h.get('action')}]"},
-                 {'component': 'VCardText', 'text': h.get('target')}
-             ]})
-        return res
+            action = h.get('action', '未知')
+            title = h.get('title', '无标题')
+            time_str = h.get('time', '')
+            raw_files = h.get('files', [])
+            
+            # 统计标签
+            tags = []
+            file_details = []
+            
+            if raw_files:
+                v, n, i, o = 0, 0, 0, 0
+                for f in raw_files:
+                    f_low = f.lower()
+                    file_details.append(f) # 保留全路径或文件名
+                    if f_low.endswith(('.mp4', '.mkv', '.ts', '.iso')): v+=1
+                    elif f_low.endswith(('.nfo', '.xml')): n+=1
+                    elif f_low.endswith(('.jpg', '.png', '.bif')): i+=1
+                    else: o+=1
+                
+                if v: tags.append({'text': f'视频 {v}', 'color': MORANDI_RED})
+                if n: tags.append({'text': f'元数据 {n}', 'color': MORANDI_GREY})
+                if i: tags.append({'text': f'图片 {i}', 'color': MORANDI_BLUE})
+                if o: tags.append({'text': f'其他 {o}', 'color': MORANDI_PURPLE})
+            elif h.get('target'):
+                # 兼容旧数据
+                file_details.append(str(h.get('target')))
+                tags.append({'text': '旧版记录', 'color': MORANDI_GREY})
+
+            # 动作颜色
+            action_color = MORANDI_GREEN if "发现" in action else MORANDI_BLUE
+            if "清理" in action: action_color = MORANDI_RED
+
+            # 构建内容
+            # 第一行: 标题 + 动作 + 时间
+            # 第二行: 分类标签
+            # 第三行: 文件列表 (带背景色容器)
+            
+            detail_lines = []
+            for f in file_details[:10]: # 限制显示数量
+                detail_lines.append({'component': 'div', 'class': 'text-caption text-grey-darken-1', 'text': f"• {Path(f).name}"})
+            if len(file_details) > 10:
+                detail_lines.append({'component': 'div', 'class': 'text-caption text-grey', 'text': f"... 等共 {len(file_details)} 个文件"})
+
+            card_content = [
+                # Header
+                {'component': 'div', 'class': 'd-flex align-center justify-space-between', 'content': [
+                     {'component': 'div', 'class': 'd-flex align-center', 'content': [
+                         {'component': 'VChip', 'props': {'size': 'small', 'color': action_color, 'variant': 'flat', 'class': 'mr-2'}, 'text': action},
+                         {'component': 'span', 'class': 'text-body-2 font-weight-bold', 'text': title},
+                     ]},
+                     {'component': 'span', 'class': 'text-caption text-grey', 'text': time_str}
+                ]},
+                # Tags
+                {'component': 'div', 'class': 'd-flex flex-wrap gap-1 mt-2 mb-2', 'content': [
+                    {'component': 'VChip', 'props': {'size': 'x-small', 'color': t['color'], 'variant': 'tonal', 'class': 'mr-1'}, 'text': t['text']}
+                    for t in tags
+                ]},
+                # Details Box
+                {'component': 'div', 'class': 'pa-2 rounded bg-grey-lighten-4', 'content': detail_lines}
+            ]
+            
+            history_cards.append({
+                'component': 'VCard',
+                'props': {'class': 'mb-3', 'variant': 'outlined'},
+                'content': [{'component': 'VCardText', 'content': card_content}]
+            })
+
+        return history_cards if history_cards else [
+            {'component': 'div', 'class': 'text-center text-grey mt-4', 'text': '暂无清理记录'}
+        ]
 
     def _process_queue_loop(self):
         stats = {"scanned": 0, "matched": 0, "deleted": 0, "failed": 0, "deleted_files": []}
@@ -241,12 +328,17 @@ class StrmDeLocal(_PluginBase):
 
     def _find_by_transfer_history(self, strm_path: Path, local_base: Path) -> Tuple[bool, List[Path], Optional[str]]:
         path_str = str(strm_path).replace("\\\\", "/")
+        
+        # --- V1.1.1 修复: 增强 TMDB 提取逻辑 ({tmdbid=...}) ---
         tmdb_id = None
-        tmdb_match = re.search(r'\{tmdb[=-]?(\d+)\}', path_str, re.I)
+        # 匹配 {tmdbid=123}, {tmdb=123}, {tmdb-123}
+        tmdb_match = re.search(r'\{(?:tmdb|tmdbid)[=-]?(\d+)\}', path_str, re.I)
         if not tmdb_match:
             tmdb_match = re.search(r'tmdb[=-](\d+)', path_str, re.I)
         if not tmdb_match:
+            # 兼容旧格式
             tmdb_match = re.search(r'\[tmdbid[=-](\d+)\]', path_str, re.I)
+        
         if tmdb_match:
             tmdb_id = int(tmdb_match.group(1))
         
@@ -257,13 +349,13 @@ class StrmDeLocal(_PluginBase):
             episode_num = f"E{se_match.group(2).zfill(2)}"
         
         if not tmdb_id:
-            logger.info(f"未能从路径提取 TMDB ID")
+            logger.info(f"未能从路径提取 TMDB ID: {strm_path.name}")
             return False, [], None
         
         msg = f"TMDB:{tmdb_id}"
         if season_num: msg += f" {season_num}"
         if episode_num: msg += f"{episode_num}"
-        logger.info(f"提取: {msg}")
+        logger.info(f"提取成功: {msg}")
         
         transfer_records = []
         try:
@@ -349,6 +441,9 @@ class StrmDeLocal(_PluginBase):
         except: pass
 
     def _handle_single_file(self, strm_path: Path, stats: dict = None):
+        # --- V1.1.1 修复: 增加处理开始日志 ---
+        logger.info(f"开始处理任务: {strm_path.name}")
+        
         path_str = str(strm_path).replace("\\\\", "/")
         if stats is not None: stats["scanned"] += 1
         
@@ -365,7 +460,10 @@ class StrmDeLocal(_PluginBase):
                 local_base = Path(l.strip())
                 break
         
-        if not local_base: return
+        if not local_base: 
+            # --- V1.1.1 修复: 映射失败警告 ---
+            logger.warning(f"未找到匹配的路径映射: {strm_path}")
+            return
 
         rel_path = path_str[len(source_root):].strip("/")
         parts = rel_path.split("/")
@@ -380,12 +478,21 @@ class StrmDeLocal(_PluginBase):
             for file_path in history_files:
                 self._perform_cleanup(file_path, stats, processed_files)
                 self._recursive_check_and_cleanup(file_path.parent, stats)
-
-            self._save_history(h_msg, "清理完成" if not self._notify_only else "发现文件", 
-                             str(len(history_files)) + " 个文件")
         
         if self._deep_search:
             self._do_deep_search(strm_path, local_base, parts, processed_files, stats)
+        
+        # 统一保存历史 (如果有匹配)
+        if found_by_history or (self._deep_search and stats['matched'] > 0):
+             action_name = "清理完成" if not self._notify_only else "发现文件"
+             # 提取本次操作涉及的所有文件
+             files_record = list(set(processed_files)) # 去重
+             # 如果是仅通知模式，且文件存在，添加到记录
+             if self._notify_only and history_files:
+                 files_record = [str(f) for f in history_files]
+             
+             self._save_history(h_msg or strm_path.stem, action_name, 
+                              f"涉及 {len(files_record)} 个文件", files_list=files_record)
 
     def _get_torrent_hash(self, file_path: Path, h_record=None) -> Optional[str]:
         """获取种子Hash: 优先记录，其次反查"""
@@ -496,6 +603,7 @@ class StrmDeLocal(_PluginBase):
     def _do_cleanup_dir(self, target_dir: Path, title: str, stats: dict = None):
         if self._is_excluded(target_dir): return
         if self._notify_only:
+             # DIR cleanup is mostly for deep search, history saving handled inside
              self._save_history(title, "发现可清理", str(target_dir))
              return
         try:
@@ -505,7 +613,9 @@ class StrmDeLocal(_PluginBase):
             if stats: 
                 stats["deleted"] += 1
                 stats["deleted_files"].append(str(target_dir))
-            self._save_history(title, "清理完成", str(target_dir))
+            
+            # Directory cleanup history
+            self._save_history(title, "清理完成", f"目录: {target_dir.name}", files_list=[str(target_dir)])
         except: pass
     
     def _del_records(self, d: Path):
@@ -537,9 +647,21 @@ class StrmDeLocal(_PluginBase):
     def _is_excluded(self, p: Path) -> bool:
         return bool(self._check_exclusion(p))
 
-    def _save_history(self, title: str, action: str, target: str):
+    def _save_history(self, title: str, action: str, target: str, files_list: List[str] = None):
+        """
+        保存历史记录 (支持新的 files 字段)
+        """
         history = self.get_data('history') or []
-        history.append({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "title": title, "action": action, "target": target})
+        new_item = {
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"), 
+            "title": title, 
+            "action": action, 
+            "target": target
+        }
+        if files_list:
+            new_item["files"] = files_list
+            
+        history.append(new_item)
         self.save_data('history', history[-100:])
 
     def state_change_callback(self, *args, **kwargs): pass

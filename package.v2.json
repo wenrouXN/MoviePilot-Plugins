@@ -1,14 +1,15 @@
 {
   "StrmDeLocal": {
     "name": "STRM本地媒体资源清理",
-    "description": "探测STRM入库，自动核对并清理本地媒体资源",
+    "description": "探测STRM入库，自动关联并清理本地源文件、种子及刮削数据",
     "labels": "清理,工具",
-    "version": "1.0",
+    "version": "1.1.2",
     "icon": "clean_a.png",
     "author": "wenrouXN",
     "level": 1,
     "history": {
-      "v1.0": "首个发布版本"
+      "v1.0": "首个发布版本",
+      "v1.1.2": "UI交互优化，改进TMDB识别"
     }
   }
 }
