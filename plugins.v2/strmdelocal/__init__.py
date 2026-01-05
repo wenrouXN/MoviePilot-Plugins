@@ -458,6 +458,7 @@ class StrmDeLocal(_PluginBase):
         if deleted_count > 0:
             self._log(f"-> 已清理刮削文件: {deleted_count} 个", title=self._current_title if hasattr(self, '_current_title') else None)
 
+    def _handle_single_file(self, strm_path: Path, stats: dict = None):
         # 提取标题用于日志
         title = strm_path.stem
         
@@ -485,10 +486,10 @@ class StrmDeLocal(_PluginBase):
                 break
         
         if not local_base: 
-            self._log(f"路径映射失败: 未找到匹配的映射规则，已跳过", "warning", title=title)
+            self._log(f"-> 路径映射失败: 未找到匹配的映射规则，已跳过", "warning", title=title)
             return
         
-        self._log(f"路径映射: {source_root} => {local_base}", title=title)
+        self._log(f"-> 路径映射: {source_root} => {local_base}", title=title)
 
         rel_path = path_str[len(source_root):].strip("/")
         parts = rel_path.split("/")
@@ -498,7 +499,7 @@ class StrmDeLocal(_PluginBase):
         found_by_history, history_files, h_msg = self._find_by_transfer_history(strm_path, local_base, title=title)
         
         if found_by_history and history_files:
-            self._log(f"精确匹配成功: {len(history_files)} 个本地文件", title=title)
+            self._log(f"-> 精确匹配成功: {len(history_files)} 个本地文件", title=title)
             if stats: stats["matched"] += len(history_files)
             
             for file_path in history_files:
@@ -518,7 +519,7 @@ class StrmDeLocal(_PluginBase):
         else:
             # 尝试深度查找
             if self._deep_search:
-                self._log(f"精确匹配失败，启用深度查找...", title=title)
+                self._log(f"-> 精确匹配失败，启用深度查找...", title=title)
                 self._do_deep_search(strm_path, local_base, parts, processed_files, stats, title=title)
                 
                 if processed_files:
@@ -608,7 +609,7 @@ class StrmDeLocal(_PluginBase):
                 except: return
                 
                 # 不再输出候选列表以提高性能
-                self._log(f"本地目录不匹配: [{part}]，尝试智能重定向...", title=title)
+                self._log(f"-> 本地目录不匹配: [{part}]，尝试智能重定向...", title=title)
                 
                 name_year = re.search(r'(.+?)[\(\[（](\d{4})[\)\]）]', part)
                 if name_year:
@@ -616,7 +617,7 @@ class StrmDeLocal(_PluginBase):
                     for d in sub_dirs:
                         if n in d.name.lower() and y in d.name:
                             current = d; found = True
-                            self._log(f"智能重定向成功: {d.name}", title=title)
+                            self._log(f"-> 智能重定向成功: {d.name}", title=title)
                             break
                 if not found and re.search(r'[sS]eason\s*\d+', part, re.I):
                     num = int(re.search(r'\d+', part).group())
@@ -624,10 +625,10 @@ class StrmDeLocal(_PluginBase):
                         m = re.search(r'[sS]eason\s*(\d+)', d.name, re.I)
                         if m and int(m.group(1)) == num:
                             current = d; found = True
-                            self._log(f"季目录匹配成功: {d.name}", title=title)
+                            self._log(f"-> 季目录匹配成功: {d.name}", title=title)
                             break
                 if not found:
-                    self._log(f"本地媒体定位失败: 未找到目录 [{part}]", title=title)
+                    self._log(f"-> 本地媒体定位失败: 未找到目录 [{part}]", title=title)
                     return 
 
         strm_stem = strm_path.stem
