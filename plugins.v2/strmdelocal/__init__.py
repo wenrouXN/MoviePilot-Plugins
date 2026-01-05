@@ -50,7 +50,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "探测STRM入库，自动关联并清理本地源文件、种子及刮削数据"
     plugin_icon = ""
-    plugin_version = "1.1.4"
+    plugin_version = "1.1.5"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -89,7 +89,7 @@ class StrmDeLocal(_PluginBase):
 
     def init_plugin(self, config: dict = None):
         self._log("--------------------")
-        self._log("插件初始化中 (V1.1.4)...")
+        self._log("插件初始化中 (V1.1.5)...")
         if not config: config = self.get_config() or {}
         self._enabled = self._to_bool(config.get("enabled", False))
         mappings = config.get("path_mappings") or ""
@@ -458,12 +458,10 @@ class StrmDeLocal(_PluginBase):
         if deleted_count > 0:
             self._log(f"-> 已清理刮削文件: {deleted_count} 个", title=self._current_title if hasattr(self, '_current_title') else None)
 
-    def _handle_single_file(self, strm_path: Path, stats: dict = None):
         # 提取标题用于日志
         title = strm_path.stem
         
-        # 开始分隔线
-        self._log("--------------------", title=title)
+        # 直接输出检测信息 (不再需要分隔线，标题已提供区分)
         self._log(f"监测到 strm 入库: {strm_path}", title=title)
         
         path_str = str(strm_path).replace("\\\\", "/")
@@ -472,8 +470,7 @@ class StrmDeLocal(_PluginBase):
         # 检查排除规则
         hit_rule = self._check_exclusion(strm_path)
         if hit_rule:
-            self._log(f"-> 命中排除规则: [{hit_rule}]，跳过处理", title=title)
-            self._log(f"结果: 已跳过 (排除规则)", title=title)
+            self._log(f"命中排除规则: [{hit_rule}]，已跳过", title=title)
             return
         
         # 查找路径映射
@@ -488,11 +485,10 @@ class StrmDeLocal(_PluginBase):
                 break
         
         if not local_base: 
-            self._log(f"-> 路径映射失败: 未找到匹配的映射规则", "warning", title=title)
-            self._log(f"结果: 已跳过 (无匹配映射)", title=title)
+            self._log(f"路径映射失败: 未找到匹配的映射规则，已跳过", "warning", title=title)
             return
         
-        self._log(f"-> 路径映射成功: {source_root} => {local_base}", title=title)
+        self._log(f"路径映射: {source_root} => {local_base}", title=title)
 
         rel_path = path_str[len(source_root):].strip("/")
         parts = rel_path.split("/")
@@ -502,7 +498,7 @@ class StrmDeLocal(_PluginBase):
         found_by_history, history_files, h_msg = self._find_by_transfer_history(strm_path, local_base, title=title)
         
         if found_by_history and history_files:
-            self._log(f"-> 精确匹配成功: {len(history_files)} 个本地文件", title=title)
+            self._log(f"精确匹配成功: {len(history_files)} 个本地文件", title=title)
             if stats: stats["matched"] += len(history_files)
             
             for file_path in history_files:
@@ -511,7 +507,7 @@ class StrmDeLocal(_PluginBase):
             
             # 结果汇总
             action = "清理完成" if not self._notify_only else "发现待清理"
-            self._log(f"结果: {action}，处理 {len(history_files)} 个文件", title=title)
+            self._log(f"{action}，处理 {len(history_files)} 个文件", title=title)
             
             # 保存历史
             files_record = list(set(processed_files))
@@ -522,18 +518,18 @@ class StrmDeLocal(_PluginBase):
         else:
             # 尝试深度查找
             if self._deep_search:
-                self._log(f"-> 精确匹配失败，启用深度查找...", title=title)
+                self._log(f"精确匹配失败，启用深度查找...", title=title)
                 self._do_deep_search(strm_path, local_base, parts, processed_files, stats, title=title)
                 
                 if processed_files:
                     action = "清理完成" if not self._notify_only else "发现待清理"
-                    self._log(f"结果: {action}，深度查找处理 {len(processed_files)} 个文件", title=title)
+                    self._log(f"{action}，深度查找处理 {len(processed_files)} 个文件", title=title)
                     self._save_history(h_msg or strm_path.stem, action, 
                                      f"涉及 {len(processed_files)} 个文件 (深度查找)", files_list=list(processed_files))
                 else:
-                    self._log(f"结果: 未找到对应本地媒体资源，已跳过", title=title)
+                    self._log(f"未找到对应本地媒体资源，已跳过", title=title)
             else:
-                self._log(f"结果: 未找到对应本地媒体资源，已跳过", title=title)
+                self._log(f"未找到对应本地媒体资源，已跳过", title=title)
 
     def _get_torrent_hash(self, file_path: Path, h_record=None) -> Optional[str]:
         try:
@@ -611,12 +607,8 @@ class StrmDeLocal(_PluginBase):
                     sub_dirs = [x for x in current.iterdir() if x.is_dir()]
                 except: return
                 
-                # 显示候选列表
-                if sub_dirs:
-                    dir_names = [d.name for d in sub_dirs[:20]]
-                    self._log(f"-> 本地目录名称不匹配: [{part}]，正在尝试智能重定向...", title=title)
-                    if len(dir_names) <= 10:
-                        self._log(f"-> 候选目录: {dir_names}", title=title)
+                # 不再输出候选列表以提高性能
+                self._log(f"本地目录不匹配: [{part}]，尝试智能重定向...", title=title)
                 
                 name_year = re.search(r'(.+?)[\(\[（](\d{4})[\)\]）]', part)
                 if name_year:
@@ -624,7 +616,7 @@ class StrmDeLocal(_PluginBase):
                     for d in sub_dirs:
                         if n in d.name.lower() and y in d.name:
                             current = d; found = True
-                            self._log(f"-> 智能重定向成功: {d.name}", title=title)
+                            self._log(f"智能重定向成功: {d.name}", title=title)
                             break
                 if not found and re.search(r'[sS]eason\s*\d+', part, re.I):
                     num = int(re.search(r'\d+', part).group())
@@ -632,10 +624,10 @@ class StrmDeLocal(_PluginBase):
                         m = re.search(r'[sS]eason\s*(\d+)', d.name, re.I)
                         if m and int(m.group(1)) == num:
                             current = d; found = True
-                            self._log(f"-> 季目录匹配成功: {d.name}", title=title)
+                            self._log(f"季目录匹配成功: {d.name}", title=title)
                             break
                 if not found:
-                    self._log(f"-> 本地媒体定位失败: 未找到目录 [{part}]", title=title)
+                    self._log(f"本地媒体定位失败: 未找到目录 [{part}]", title=title)
                     return 
 
         strm_stem = strm_path.stem
