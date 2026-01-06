@@ -52,7 +52,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.2.9"
+    plugin_version = "1.3.0"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -710,10 +710,10 @@ class StrmDeLocal(_PluginBase):
                 else:
                     history_match_info['deep_search'] = '失败'
                     self._log(f"未找到对应本地媒体资源，已跳过", title=title)
-                    self._save_history(title, "未找到本地资源", str(local_base), strm_path=str(strm_path), match_info=history_match_info, media_info=media_info)
+                    # V1.3.0: 未找到资源不再保存到历史记录，避免通过日志挤占有效记录
             else:
                 self._log(f"未找到对应本地媒体资源，已跳过", title=title)
-                self._save_history(title, "未找到本地资源", "精确匹配失败", strm_path=str(strm_path), match_info=history_match_info, media_info=media_info)
+                # V1.3.0: 未找到资源不再保存到历史记录
 
     def _get_torrent_hash(self, file_path: Path, h_record=None) -> Optional[str]:
         try:
