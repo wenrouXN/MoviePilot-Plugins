@@ -53,7 +53,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.3.2"
+    plugin_version = "1.3.3"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -569,8 +569,12 @@ class StrmDeLocal(_PluginBase):
         try:
             for item in dir_path.iterdir():
                 if item.is_dir():
-                    has_valid_content = True
-                    break
+                    # V1.3.3: 仅当存在"季"文件夹或其他媒体文件夹时才保留，忽略 .actors 等元数据目录
+                    # 允许的目录名特征: Season, Specials, SP, d+, Featurettes, Extras, Subs
+                    if re.search(r'^(Season|Specials|SP|Featurettes|Extras|Subs|BDMV|CERTIFICATE|VIDEO_TS|第.+季|S\d+)', item.name, re.I):
+                        has_valid_content = True
+                        break
+                    # 否则视为杂项目录(如 .actors, extrafanart)，允许清理
                 elif item.is_file():
                     if item.suffix.lower() in MEDIA_EXTENSIONS:
                         has_valid_content = True
