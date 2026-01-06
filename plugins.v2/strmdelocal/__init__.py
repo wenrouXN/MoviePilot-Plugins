@@ -52,7 +52,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.2.6"
+    plugin_version = "1.2.8"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -272,7 +272,11 @@ class StrmDeLocal(_PluginBase):
 
         cards = []
         for h in sorted(historys, key=lambda x: x.get('time', ''), reverse=True):
-             # 提取信息
+            # V1.2.7: 过滤掉未匹配到文件的记录
+            files = h.get("files", [])
+            if not files: continue
+             
+            # 提取信息
             media_title = h.get("media_title")
             media_year = h.get("media_year")
             media_type = h.get("media_type")
