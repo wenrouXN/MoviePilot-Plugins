@@ -48,9 +48,9 @@ class StrmFileHandler(FileSystemEventHandler):
 class StrmDeLocal(_PluginBase):
     plugin_id = "StrmDeLocal"
     plugin_name = "STRM本地媒体资源清理"
-    plugin_desc = "探测STRM入库，自动关联并清理本地源文件、种子及刮削数据"
+    plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.1.5"
+    plugin_version = "1.1.6"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -89,7 +89,7 @@ class StrmDeLocal(_PluginBase):
 
     def init_plugin(self, config: dict = None):
         self._log("--------------------")
-        self._log("插件初始化中 (V1.1.5)...")
+        self._log("插件初始化中 (V1.1.6)...")
         if not config: config = self.get_config() or {}
         self._enabled = self._to_bool(config.get("enabled", False))
         mappings = config.get("path_mappings") or ""
@@ -168,7 +168,7 @@ class StrmDeLocal(_PluginBase):
             {'component': 'VRow', 'content': [
                 {'component': 'VCol', 'props': {'cols': 12}, 'content': [
                     {'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal', 
-                        'text': '本插件通过探测 STRM 文件入库，自动关联并清理对应的本地源文件（支持物理删除配置）。'}},
+                        'text': '监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间。'}},
                 ]}
             ]},
             {'component': 'VRow', 'content': [
@@ -247,6 +247,10 @@ class StrmDeLocal(_PluginBase):
             for f in stats["deleted_files"][:8]:
                 text += f"\n- {Path(f).name}"
             if len(stats["deleted_files"]) > 8: text += "\n..."
+        
+        # 新增通知日志
+        self._log(f"批量处理完成,发送通知: {text.replace(chr(10), ' ')}")
+        
         self.post_message(mtype=NotificationType.SiteMessage, title=title, text=text)
 
     def get_page(self) -> List[dict]:
