@@ -53,7 +53,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.3.7"
+    plugin_version = "1.3.8"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -571,17 +571,24 @@ class StrmDeLocal(_PluginBase):
         
         return bool(matched_files), matched_files, msg
 
-    def _recursive_check_and_cleanup(self, dir_path: Path, stats: dict = None, title: str = None, root_path: Path = None):
+    def _recursive_check_and_cleanup(self, dir_path: Path, stats: dict = None, title: str = None, root_path: Path = None, media_type: str = "movie", current_depth: int = 1):
         if not dir_path.exists() or not dir_path.is_dir():
             return
         
-        # 安全检查: 防止向上递归删除到了根目录或其父目录
+        # 1. 递归深度检查 (V1.3.8 第四重保险)
+        # 电影只允许删1层 (MovieFolder), 剧集允许删2层 (Season -> ShowFolder)
+        max_limit = 2 if media_type == "tv" else 1
+        if current_depth > max_limit:
+             # self._log(f"-> 达到递归清理上限 ({media_type} Max={max_limit}): {dir_path.name} 保留", title=title)
+             return
+
+        # 2. 安全检查: 防止向上递归删除到了根目录或其父目录
         if root_path:
             try:
-                # 1. 绝对边界检查
+                # 绝对边界检查
                 if dir_path == root_path: return
                 
-                # 2. 上级目录检查 (确保不越过 root_path)
+                # 上级目录检查 (确保不越过 root_path)
                 if str(root_path).replace("\\\\", "/").startswith(str(dir_path).replace("\\\\", "/")):
                      return
             except: pass
@@ -615,12 +622,12 @@ class StrmDeLocal(_PluginBase):
             if stats: stats["deleted"] += 1
             
             # Smart Boundary: 如果刚删除的是媒体实体目录 (如 "Movie (2023)"), 则停止向上递归
-            # 这构成了第三重保险: 1.映射根目录保护 2.自定义层级保护 3.智能实体边界
+            # 这构成了第三重保险: 1.映射根目录保护 2.智能实体边界 3.类型深度限制
             if self._is_media_entity_dir(dir_path):
                  return
 
             if dir_path.parent.exists():
-                self._recursive_check_and_cleanup(dir_path.parent, stats, title=title, root_path=root_path)
+                self._recursive_check_and_cleanup(dir_path.parent, stats, title=title, root_path=root_path, media_type=media_type, current_depth=current_depth + 1)
         except Exception as e:
             self._log(f"-> 目录回收失败: {e}", "warning", title=title)
 
@@ -751,6 +758,14 @@ class StrmDeLocal(_PluginBase):
         found_by_history, history_files, h_msg = self._find_by_transfer_history(strm_path, local_base, title=title, tmdb_id_in=tmdb_id)
         
         history_match_info = {'records': 0, 'deep_search': '未启用'}
+        
+        # 判定媒体类型 (V1.3.8)
+        # 优先使用 Metadata, 其次使用 Regex
+        c_media_type = "movie"
+        if media_info and media_info.get("type"):
+            c_media_type = media_info.get("type")
+        elif season_num or episode_num:
+            c_media_type = "tv"
 
         if found_by_history and history_files:
             history_match_info['records'] = len(history_files)
@@ -758,8 +773,8 @@ class StrmDeLocal(_PluginBase):
             if stats: stats["matched"] += len(history_files)
             
             for file_path in history_files:
-                self._perform_cleanup(file_path, stats, processed_files, title=title)
-                self._recursive_check_and_cleanup(file_path.parent, stats, title=title, root_path=local_base)
+                self._perform_cleanup(file_path, stats, processed_files, title=title, media_type=c_media_type)
+                self._recursive_check_and_cleanup(file_path.parent, stats, title=title, root_path=local_base, media_type=c_media_type)
             
             action = "清理完成" if not self._notify_only else "发现待清理"
             self._log(f"{action}，处理 {len(history_files)} 个文件", title=title)
@@ -775,8 +790,8 @@ class StrmDeLocal(_PluginBase):
             # 7. 尝试深度查找
             if self._deep_search:
                 history_match_info['deep_search'] = '深度查找中'
-                self._log(f"-> 精确匹配失败，启用深度查找...", title=title)
-                self._do_deep_search(strm_path, local_base, parts, processed_files, stats, title=title)
+                self._log(f"-> 精确匹配失败，启用深度查找 (Type={c_media_type})...", title=title)
+                self._do_deep_search(strm_path, local_base, parts, processed_files, stats, title=title, media_type=c_media_type)
                 
                 if processed_files:
                     history_match_info['deep_search'] = '成功'
@@ -810,7 +825,9 @@ class StrmDeLocal(_PluginBase):
         except:
             return None
 
-    def _perform_cleanup(self, file_path: Path, stats: dict, processed_files: set, title: str = None):
+            return None
+
+    def _perform_cleanup(self, file_path: Path, stats: dict, processed_files: set, title: str = None, media_type: str = "movie"):
         if str(file_path) in processed_files: return
         
         file_exists = file_path.exists()
@@ -867,7 +884,7 @@ class StrmDeLocal(_PluginBase):
 
         processed_files.add(str(file_path))
 
-    def _do_deep_search(self, strm_path: Path, local_base: Path, parts: List[str], processed_files: set, stats: dict, title: str = None):
+    def _do_deep_search(self, strm_path: Path, local_base: Path, parts: List[str], processed_files: set, stats: dict, title: str = None, media_type: str = "movie"):
         current = local_base
         for part in parts[:-1]:
             target = current / part
@@ -911,8 +928,8 @@ class StrmDeLocal(_PluginBase):
                     if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS and se.lower() in f.name.lower():
                         if str(f) not in processed_files and not self._is_excluded(f):
                             if stats: stats["matched"] += 1
-                            self._perform_cleanup(f, stats, processed_files, title=title)
-                self._recursive_check_and_cleanup(current, stats, title=title, root_path=local_base)
+                            self._perform_cleanup(f, stats, processed_files, title=title, media_type=media_type)
+                self._recursive_check_and_cleanup(current, stats, title=title, root_path=local_base, media_type=media_type)
         else:
             if current != local_base and str(current) not in processed_files:
                 if stats: stats["matched"] += 1
