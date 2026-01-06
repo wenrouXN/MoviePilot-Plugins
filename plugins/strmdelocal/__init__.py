@@ -53,7 +53,7 @@ class StrmDeLocal(_PluginBase):
     plugin_name = "STRM本地媒体资源清理"
     plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.3.5"
+    plugin_version = "1.3.6"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -282,6 +282,16 @@ class StrmDeLocal(_PluginBase):
     def is_media_file(filename: str) -> bool:
         ext = os.path.splitext(filename)[1].lower()
         return ext in MEDIA_EXTENSIONS
+
+    @staticmethod
+    def _is_media_entity_dir(path: Path) -> bool:
+        """判断目录是否为媒体实体目录 (包含年份或TMDBID)"""
+        name = path.name
+        # 匹配 (2023) 或 [2023] 或 {tmdb...} 或 [tmdbid...]
+        if re.search(r'[\(\[（]\d{4}[\)\]）]', name): return True
+        if re.search(r'\{(?:tmdb|tmdbid)[=-]?\d+\}', name, re.I): return True
+        if re.search(r'\[(?:tmdb|tmdbid)[=-]?\d+\]', name, re.I): return True
+        return False
 
     def get_page(self) -> List[dict]:
         historys = self.get_data('history')
@@ -617,6 +627,12 @@ class StrmDeLocal(_PluginBase):
             shutil.rmtree(dir_path, onerror=self._on_rm_error)
             self._log(f"-> 已回收空目录: {dir_path}", title=title)
             if stats: stats["deleted"] += 1
+            
+            # Smart Boundary: 如果刚删除的是媒体实体目录 (如 "Movie (2023)"), 则停止向上递归
+            # 这构成了第三重保险: 1.映射根目录保护 2.自定义层级保护 3.智能实体边界
+            if self._is_media_entity_dir(dir_path):
+                 return
+
             if dir_path.parent.exists():
                 self._recursive_check_and_cleanup(dir_path.parent, stats, title=title, root_path=root_path)
         except Exception as e:
