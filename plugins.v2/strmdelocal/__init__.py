@@ -48,9 +48,9 @@ class StrmFileHandler(FileSystemEventHandler):
 class StrmDeLocal(_PluginBase):
     plugin_id = "StrmDeLocal"
     plugin_name = "STRM本地媒体资源清理"
-    plugin_desc = "监控STRM目录变化，当检测到新STRM文件，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
+    plugin_desc = "监控STRM目录变化，当检测到新STRM文件时，根据路径映射规则清理对应本地资源库中的相关媒体文件、种子及刮削数据,释放本地存储空间"
     plugin_icon = ""
-    plugin_version = "1.1.7"
+    plugin_version = "1.1.8"
     plugin_author = "wenrouXN"
 
     def __init__(self):
@@ -89,7 +89,7 @@ class StrmDeLocal(_PluginBase):
 
     def init_plugin(self, config: dict = None):
         self._log("--------------------")
-        self._log("插件初始化中 (V1.1.7)...")
+        self._log("插件初始化中 (V1.1.8)...")
         if not config: config = self.get_config() or {}
         from app.chain.media import MediaChain
         self._mediachain = MediaChain()
@@ -135,14 +135,17 @@ class StrmDeLocal(_PluginBase):
         self._worker_thread.start()
         self._observer = Observer()
         active_count = 0
+        scheduled_paths = set()
         for mapping in self._path_mappings:
             if ":" not in mapping: continue
             strm_root = mapping.split(":", 1)[0].strip()
+            if strm_root in scheduled_paths: continue
             strm_path = Path(strm_root)
             if strm_path.exists():
                 try:
                     self._observer.schedule(StrmFileHandler(self._queue), path=strm_root, recursive=True)
                     active_count += 1
+                    scheduled_paths.add(strm_root)
                     # V1.1.3: 统计现有 strm 文件数
                     strm_count = self._count_strm_files(strm_path)
                     self._log(f"成功挂载监控源: {strm_root} (已存在 {strm_count} 个 .strm 文件)")
@@ -403,10 +406,23 @@ class StrmDeLocal(_PluginBase):
     def _process_queue_loop(self):
         stats = {"scanned": 0, "matched": 0, "deleted": 0, "failed": 0, "deleted_files": []}
         has_data = False
+        processed_cache = {}
+        
         while not self._stop_event.is_set():
             try:
                 task = self._queue.get(timeout=self._notify_interval)
                 if task is None: break
+
+                # 防重逻辑: 5秒内忽略重复文件事件
+                path_str = str(task)
+                now = time.time()
+                last_time = processed_cache.get(path_str, 0)
+                if now - last_time < 5:
+                    self._queue.task_done()
+                    continue
+                processed_cache[path_str] = now
+                if len(processed_cache) > 1000: processed_cache.clear()
+                
                 has_data = True
                 self._handle_single_file(task, stats)
                 self._queue.task_done()
