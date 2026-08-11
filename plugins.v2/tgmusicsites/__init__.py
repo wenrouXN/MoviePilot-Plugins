@@ -152,7 +152,7 @@ class TgMusicSites(_PluginBase):
         }
 
     def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
-        """返回插件配置表单与默认配置。"""
+        """返回插件配置表单与默认配置。凭据（api_id/api_hash/session）从环境变量自动读取，无需手动配置。"""
         return [
             {
                 "component": "VForm",
@@ -179,18 +179,6 @@ class TgMusicSites(_PluginBase):
                     },
                     {
                         "component": "VTextField",
-                        "props": {"model": "api_id", "label": "Telegram API ID"}
-                    },
-                    {
-                        "component": "VTextField",
-                        "props": {"model": "api_hash", "label": "Telegram API Hash"}
-                    },
-                    {
-                        "component": "VTextField",
-                        "props": {"model": "session_string", "label": "Telegram Session String"}
-                    },
-                    {
-                        "component": "VTextField",
                         "props": {
                             "model": "proxy_host",
                             "label": "代理主机",
@@ -200,6 +188,17 @@ class TgMusicSites(_PluginBase):
                     {
                         "component": "VTextField",
                         "props": {"model": "proxy_port", "label": "代理端口", "hint": "如 7890 (HTTP) / 7891 (SOCKS5)"}
+                    },
+                    {
+                        "component": "VSelect",
+                        "props": {
+                            "model": "proxy_type",
+                            "label": "代理类型",
+                            "items": [
+                                {"title": "SOCKS5", "value": "socks5"},
+                                {"title": "HTTP", "value": "http"}
+                            ]
+                        }
                     },
                     {
                         "component": "VTextField",
@@ -212,6 +211,15 @@ class TgMusicSites(_PluginBase):
                     {
                         "component": "VTextField",
                         "props": {"model": "button_index", "label": "默认按钮序号", "hint": "默认 1"}
+                    },
+                    {
+                        "component": "VAlert",
+                        "props": {
+                            "type": "info",
+                            "dense": True,
+                            "class": "mt-2",
+                            "text": "Telegram 凭据（api_id / api_hash / session_string）由宿主环境变量 TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_SESSION_STRING 提供，无需在此配置。"
+                        }
                     }
                 ]
             }
@@ -219,9 +227,6 @@ class TgMusicSites(_PluginBase):
             "enabled": False,
             "bot_username": "music_v1bot",
             "download_dir": "/qbs/torrents/music/",
-            "api_id": "",
-            "api_hash": "",
-            "session_string": "",
             "proxy_host": "192.168.1.68",
             "proxy_port": 7891,
             "proxy_type": "socks5",
@@ -243,7 +248,32 @@ class TgMusicSites(_PluginBase):
                 }
             ]
         sites = self.get_data("tg_sites") or {}
-        site_rows = [
+        conn = self.get_data("tg_conn_status") or {}
+        conn_state = "未测试"
+        if conn.get("success") is True:
+            conn_state = f"✅ 已连接 ({conn.get('time', '')})"
+        elif conn.get("success") is False:
+            conn_state = f"❌ 连接失败 ({conn.get('time', '')})"
+        cred_ok = bool(self._api_id and self._api_hash and self._session_string)
+        cred_state = "✅ 已配置（环境变量）" if cred_ok else "❌ 未配置（需设 TELEGRAM_* 环境变量）"
+        # 默认站点 = 配置的 bot（自动生成，无需手动添加）；tg_sites 里的为附加站点
+        default_site = {
+            "component": "div",
+            "props": {"class": "d-flex align-center justify-space-between py-1"},
+            "content": [
+                {
+                    "component": "div",
+                    "props": {"class": "text-body-2"},
+                    "text": f"⭐ 默认站点：@{self._bot_username}（配置项）",
+                },
+                {
+                    "component": "div",
+                    "props": {"class": "text-body-2 text-grey"},
+                    "text": "启用中",
+                },
+            ],
+        }
+        extra_rows = [
             {
                 "component": "div",
                 "props": {"class": "d-flex align-center justify-space-between py-1"},
@@ -251,7 +281,7 @@ class TgMusicSites(_PluginBase):
                     {
                         "component": "div",
                         "props": {"class": "text-body-2"},
-                        "text": f"{v.get('name', 'TG音乐')} (@{v.get('bot_username', self._bot_username)})"
+                        "text": f"{v.get('name', 'TG音乐')} (@{v.get('bot_username', '')})",
                     },
                     {
                         "component": "VBtn",
@@ -273,13 +303,8 @@ class TgMusicSites(_PluginBase):
                 ],
             }
             for k, v in sites.items()
-        ] or [
-            {
-                "component": "div",
-                "props": {"class": "text-body-2 text-grey py-2"},
-                "text": "暂无站点，通过上方按钮添加。",
-            }
         ]
+        site_rows = [default_site] + (extra_rows or [])
         return [
             {
                 "component": "VRow",
@@ -312,7 +337,12 @@ class TgMusicSites(_PluginBase):
                                             {
                                                 "component": "div",
                                                 "props": {"class": "text-body-2 py-1"},
-                                                "text": f"凭据：{'已配置' if self._api_id and self._session_string else '未配置'}",
+                                                "text": f"连接状态：{conn_state}",
+                                            },
+                                            {
+                                                "component": "div",
+                                                "props": {"class": "text-body-2 py-1"},
+                                                "text": f"凭据：{cred_state}",
                                             },
                                         ],
                                     },
@@ -358,8 +388,8 @@ class TgMusicSites(_PluginBase):
                                         "component": "VCardText",
                                         "props": {"class": "py-2"},
                                         "content": [
-                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"已接入 {len(sites)} 个 TG 站点"},
-                                            {"component": "div", "props": {"class": "text-body-2 py-1 text-grey"}, "text": "添加站点请调用 POST /api/v1/plugin/TgMusicSites/sites"},
+                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"站点数：1 个默认 + {len(sites)} 个附加"},
+                                            {"component": "div", "props": {"class": "text-body-2 py-1 text-grey"}, "text": "默认站点由配置 bot_username 自动生成，无需手动添加；附加站点通过 API 管理"},
                                         ],
                                     },
                                 ],
@@ -427,18 +457,36 @@ class TgMusicSites(_PluginBase):
             return {"success": False, "message": f"站点 {site_id} 不存在"}
 
     async def api_test(self) -> Dict[str, Any]:
-        """测试 TG 音乐 Bot 连接。"""
+        """测试 TG 音乐 Bot 连接，并将结果保存供详情页展示。"""
         client = None
         try:
             client = self._get_client()
             if not client:
-                return {"success": False, "message": "Telethon 客户端创建失败"}
+                result = {"success": False, "message": "Telethon 客户端创建失败"}
+                self.save_data("tg_conn_status", {
+                    "time": time.strftime("%m-%d %H:%M:%S"),
+                    "success": False,
+                    "message": result["message"],
+                })
+                return result
             # Telethon connect() 成功时返回 None（仅失败时返回 False/抛异常），不能按真值判断
             await client.connect()
             me = await client.get_me()
-            return {"success": True, "message": f"连接成功: {me.first_name}"}
+            result = {"success": True, "message": f"连接成功: {me.first_name}"}
+            self.save_data("tg_conn_status", {
+                "time": time.strftime("%m-%d %H:%M:%S"),
+                "success": True,
+                "message": result["message"],
+            })
+            return result
         except Exception as e:
-            return {"success": False, "message": f"连接失败: {str(e)}"}
+            result = {"success": False, "message": f"连接失败: {str(e)}"}
+            self.save_data("tg_conn_status", {
+                "time": time.strftime("%m-%d %H:%M:%S"),
+                "success": False,
+                "message": result["message"],
+            })
+            return result
         finally:
             if client:
                 try:
