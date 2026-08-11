@@ -681,6 +681,13 @@ class TgMusicSites(_PluginBase):
     async def _do_qr_login(self) -> Optional[str]:
         """在专用 loop 内执行 qr_login，返回二维码 URL。"""
         try:
+            # 关闭旧的登录流程 client（避免多次生成二维码时连接泄漏）
+            # 仅当当前处于登录流程（未登录完成）时断开；已登录的正式 client 不碰
+            if self._login_state in ("qr_waiting", "qr_scanned") and self._client:
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    pass
             client = TelegramClient(
                 StringSession(),
                 self._api_id,
@@ -701,39 +708,58 @@ class TgMusicSites(_PluginBase):
             return None
 
     def _poll_qr_login(self) -> None:
-        """后台轮询扫码登录结果（专用 loop 内）。"""
+        """后台轮询扫码登录结果（专用 loop 内），二维码自动续期。
+
+        每轮 qr.wait 超时后 Telethon 会刷新 token，此处同步更新二维码图片，
+        保证页面上的二维码始终可扫，直到登录成功或出错。
+        """
         if not self._loop or self._loop.is_closed():
             return
-        async def _poll():
-            qr = self._login_qr_login
-            if not qr:
-                return
+        while self._login_state in ("qr_waiting", "qr_scanned"):
             try:
-                # 等待扫码确认（qr_login.wait 直到登录完成）
-                await qr.wait(timeout=60)
-                if self._client and self._client.is_connected():
-                    me = await self._client.get_me()
-                    # 保存 session
-                    session_str = StringSession.save(self._client.session)
-                    self.save_data("tg_session", session_str)
-                    self._client_ready = True
-                    self._login_state = "logged_in"
-                    self._login_qr_data = ""
-                    self._login_qr_image = ""
-                    self._login_qr_login = None
-                    logger.info(f"TG音乐站点：扫码登录成功: {me.username or me.first_name}")
+                done = self._submit(self._qr_wait_once(), timeout=40)
+                if done:
+                    return  # 登录完成
+                # 超时未扫码：token 已刷新，重新生成二维码图片
+                qr = self._login_qr_login
+                if qr:
+                    url = qr.url
+                    if url and url != self._login_qr_data:
+                        self._login_qr_data = url
+                        try:
+                            self._login_qr_image = self._make_qr_image(url)
+                            logger.info("TG音乐站点：二维码已自动刷新")
+                        except Exception as e:
+                            logger.error(f"TG音乐站点：二维码刷新失败: {e}")
             except asyncio.TimeoutError:
-                # 未扫码或超时：保持等待状态，二维码可重新生成
-                self._login_state = "qr_waiting"
-                logger.info("TG音乐站点：二维码等待扫码超时，可重新生成")
+                continue
             except Exception as e:
-                self._login_state = "error"
-                self._login_error = str(e)
-                logger.error(f"TG音乐站点：扫码登录失败: {e}")
+                logger.error(f"TG音乐站点：登录轮询异常: {e}")
+                return
+            time.sleep(0.3)
+
+    async def _qr_wait_once(self) -> bool:
+        """等待一轮扫码（30s）。登录成功返回 True，超时/未扫码返回 False。"""
+        qr = self._login_qr_login
+        if not qr:
+            return True
         try:
-            self._submit(_poll(), timeout=90)
-        except Exception as e:
-            logger.error(f"TG音乐站点：登录轮询异常: {e}")
+            await qr.wait(timeout=30)
+            if self._client and self._client.is_connected():
+                me = await self._client.get_me()
+                # 保存 session
+                session_str = StringSession.save(self._client.session)
+                self.save_data("tg_session", session_str)
+                self._client_ready = True
+                self._login_state = "logged_in"
+                self._login_qr_data = ""
+                self._login_qr_image = ""
+                self._login_qr_login = None
+                logger.info(f"TG音乐站点：扫码登录成功: {me.username or me.first_name}")
+                return True
+        except asyncio.TimeoutError:
+            pass
+        return False
 
     async def api_login_status(self) -> Dict[str, Any]:
         """查询 TG 登录状态。"""
