@@ -23,12 +23,7 @@ def _initialized_plugin(enabled: bool = True) -> TgMusicSites:
     plugin._enabled = enabled
     plugin._bot_username = "music_v1bot"
     plugin._download_dir = "/qbs/torrents/music/"
-    plugin._proxy_host = "127.0.0.1"
-    plugin._proxy_port = 7891
-    plugin._proxy_type = "socks5"
-    plugin._api_id = 12345
-    plugin._api_hash = "a" * 32
-    plugin._session_string = "1" + "b" * 200
+    plugin._bridge_url = "http://127.0.0.1:8300"
     plugin._search_timeout = 30
     plugin._download_timeout = 60
     plugin._button_index = 1
@@ -66,7 +61,7 @@ def test_non_music_passthrough():
     with patch.object(plugin, "_should_trigger_tg_search", return_value=True), \
          patch.object(plugin, "_tg_search", return_value=[{"title": "x"}]):
         result = plugin.tg_search_torrents(
-            site={"id": 1}, keyword="沙丘", mtype=MediaType.MOVIE, page=0
+            keyword="沙丘", mtype=MediaType.MOVIE, page=0
         )
         assert result == []
 
@@ -74,14 +69,12 @@ def test_non_music_passthrough():
 def test_music_search_returns_torrents():
     """音乐搜索应返回 TorrentInfo 列表。"""
     plugin = _initialized_plugin(enabled=True)
-    fake_torrent = {"title": "七里香", "description": "", "button_data": b"\x01\x02", "msg_id": 100}
-    # _tg_search 的真实实现会调 _results_to_torrents 转换；这里 patch 掉网络部分，
-    # 让 _tg_search 直接返回转换后的 TorrentInfo（与真实流程一致）
+    fake_torrent = {"title": "七里香", "description": "", "button_data": "AQI=", "msg_id": 100}
     torrents = plugin._results_to_torrents([fake_torrent])
     with patch.object(plugin, "_should_trigger_tg_search", return_value=True), \
          patch.object(plugin, "_tg_search", return_value=torrents):
         result = plugin.tg_search_torrents(
-            site={"id": 1}, keyword="周杰伦 七里香", mtype=MediaType.MUSIC, page=0
+            keyword="周杰伦 七里香", mtype=MediaType.MUSIC, page=0
         )
         assert len(result) == 1
         torrent = result[0]
@@ -95,8 +88,8 @@ def test_results_to_torrents_enclosure_unique():
     """不同按钮数据的 enclosure 应唯一。"""
     plugin = _initialized_plugin(enabled=True)
     results = [
-        {"title": "A", "button_data": b"\x01", "msg_id": 1},
-        {"title": "B", "button_data": b"\x02", "msg_id": 1},
+        {"title": "A", "button_data": "AQ==", "msg_id": 1},
+        {"title": "B", "button_data": "Ag==", "msg_id": 1},
     ]
     torrents = plugin._results_to_torrents(results)
     assert len({t.enclosure for t in torrents}) == 2
@@ -114,3 +107,21 @@ def test_tg_download_non_tg_passthrough():
     """非 TG 资源下载应放行（返回 None，让系统模块继续）。"""
     plugin = _initialized_plugin(enabled=True)
     assert plugin.tg_download("magnet:?xt=urn:btih:abc", None, "") is None
+
+
+def test_tg_download_bridge_call():
+    """TG 资源下载应调 bridge /download 并返回 (TGMusic, hash, NoSubfolder, '')。"""
+    plugin = _initialized_plugin(enabled=True)
+    fake_result = {"title": "七里香", "button_data": "AQI=", "msg_id": 100}
+    uid = plugin._results_to_torrents([fake_result])[0].enclosure.split("/")[-1]
+    with patch.object(plugin, "_last_search_results", [fake_result]):
+        with patch.object(plugin, "_bridge_call", return_value={
+            "success": True, "file": "/qbs/torrents/music/七里香.flac"
+        }) as mock_call:
+            result = plugin._tg_download_file(f"tg://music/{uid}", None)
+            assert result[0] == "TGMusic"
+            assert result[2] == "NoSubfolder"
+            assert result[3] == ""
+            mock_call.assert_called_once()
+            call_kwargs = mock_call.call_args
+            assert call_kwargs[0][1]["msg_id"] == 100
