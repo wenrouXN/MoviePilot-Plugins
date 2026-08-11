@@ -113,6 +113,11 @@ class TgMusicSites(_PluginBase):
         self._button_index = int(config.get("button_index") or 1)
         self._api_id = int(config.get("api_id") or 0)
         self._api_hash = str(config.get("api_hash") or "").strip()
+        # 代理配置：写 data 供 _build_proxy 读取（UI 可配置，向后兼容）
+        proxy_host = str(config.get("proxy_host") or "127.0.0.1").strip()
+        proxy_port = int(config.get("proxy_port") or 7891)
+        proxy_type = str(config.get("proxy_type") or "socks5").strip().lower()
+        self.save_data("tg_proxy", {"type": proxy_type, "host": proxy_host, "port": proxy_port})
 
         if not TELEGRAM_AVAILABLE:
             logger.error("TG音乐站点插件：Telethon 未安装，请在插件依赖中安装 telethon>=1.34.0")
@@ -305,6 +310,31 @@ class TgMusicSites(_PluginBase):
                         "props": {"model": "button_index", "label": "默认按钮序号", "hint": "默认 1"}
                     },
                     {
+                        "component": "VTextField",
+                        "props": {
+                            "model": "proxy_host",
+                            "label": "代理主机",
+                            "hint": "默认 127.0.0.1（本机代理）；生产环境如代理在其它机器填其 IP"
+                        }
+                    },
+                    {
+                        "component": "VTextField",
+                        "props": {
+                            "model": "proxy_port",
+                            "label": "代理端口",
+                            "hint": "默认 7891"
+                        }
+                    },
+                    {
+                        "component": "VSelect",
+                        "props": {
+                            "model": "proxy_type",
+                            "label": "代理类型",
+                            "items": ["socks5", "http", "socks4"],
+                            "hint": "默认 socks5"
+                        }
+                    },
+                    {
                         "component": "VAlert",
                         "props": {
                             "type": "info",
@@ -322,7 +352,10 @@ class TgMusicSites(_PluginBase):
             "download_dir": "/qbs/torrents/music/",
             "search_timeout": 30,
             "download_timeout": 120,
-            "button_index": 1
+            "button_index": 1,
+            "proxy_host": "127.0.0.1",
+            "proxy_port": 7891,
+            "proxy_type": "socks5"
         }
 
     def get_page(self) -> Optional[List[dict]]:
