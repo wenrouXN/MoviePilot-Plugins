@@ -231,17 +231,159 @@ class TgMusicSites(_PluginBase):
         }
 
     def get_page(self) -> Optional[List[dict]]:
-        """返回插件详情页面。"""
+        """返回插件详情页面（Vuetify JSON）。"""
         if not self._enabled:
-            return None
+            return [
+                {
+                    "component": "VAlert",
+                    "props": {
+                        "type": "warning",
+                        "text": "插件未启用，请在插件配置中启用后查看详情。"
+                    },
+                }
+            ]
+        sites = self.get_data("tg_sites") or {}
+        site_rows = [
+            {
+                "component": "div",
+                "props": {"class": "d-flex align-center justify-space-between py-1"},
+                "content": [
+                    {
+                        "component": "div",
+                        "props": {"class": "text-body-2"},
+                        "text": f"{v.get('name', 'TG音乐')} (@{v.get('bot_username', self._bot_username)})"
+                    },
+                    {
+                        "component": "VBtn",
+                        "props": {
+                            "color": "error",
+                            "variant": "tonal",
+                            "size": "x-small",
+                            "prepend-icon": "mdi-delete",
+                        },
+                        "text": "删除",
+                        "events": {
+                            "click": {
+                                "api": "plugin/TgMusicSites/sites",
+                                "method": "delete",
+                                "params": {"site_id": k},
+                            }
+                        },
+                    },
+                ],
+            }
+            for k, v in sites.items()
+        ] or [
+            {
+                "component": "div",
+                "props": {"class": "text-body-2 text-grey py-2"},
+                "text": "暂无站点，通过上方按钮添加。",
+            }
+        ]
         return [
             {
-                "component": "VAlert",
-                "props": {
-                    "type": "info",
-                    "text": f"TG音乐站点插件已启用。Bot: @{self._bot_username}，下载目录: {self._download_dir}"
-                }
-            }
+                "component": "VRow",
+                "props": {"class": "mb-2"},
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "md": 6},
+                        "content": [
+                            {
+                                "component": "VCard",
+                                "props": {"variant": "tonal", "color": "primary"},
+                                "content": [
+                                    {
+                                        "component": "VCardTitle",
+                                        "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                        "text": "运行状态",
+                                    },
+                                    {
+                                        "component": "VCardText",
+                                        "props": {"class": "py-2"},
+                                        "content": [
+                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"Bot：@{self._bot_username}"},
+                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"下载目录：{self._download_dir}"},
+                                            {
+                                                "component": "div",
+                                                "props": {"class": "text-body-2 py-1"},
+                                                "text": f"代理：{self._proxy_host or '直连'}:{self._proxy_port} ({self._proxy_type})",
+                                            },
+                                            {
+                                                "component": "div",
+                                                "props": {"class": "text-body-2 py-1"},
+                                                "text": f"凭据：{'已配置' if self._api_id and self._session_string else '未配置'}",
+                                            },
+                                        ],
+                                    },
+                                    {
+                                        "component": "VCardActions",
+                                        "props": {"class": "pt-0"},
+                                        "content": [
+                                            {
+                                                "component": "VBtn",
+                                                "props": {
+                                                    "color": "primary",
+                                                    "variant": "tonal",
+                                                    "prepend-icon": "mdi-connection",
+                                                },
+                                                "text": "测试连接",
+                                                "events": {
+                                                    "click": {
+                                                        "api": "plugin/TgMusicSites/test",
+                                                        "method": "get",
+                                                    }
+                                                },
+                                            },
+                                        ],
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "md": 6},
+                        "content": [
+                            {
+                                "component": "VCard",
+                                "props": {"variant": "tonal", "color": "secondary"},
+                                "content": [
+                                    {
+                                        "component": "VCardTitle",
+                                        "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                        "text": "站点管理",
+                                    },
+                                    {
+                                        "component": "VCardText",
+                                        "props": {"class": "py-2"},
+                                        "content": [
+                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"已接入 {len(sites)} 个 TG 站点"},
+                                            {"component": "div", "props": {"class": "text-body-2 py-1 text-grey"}, "text": "添加站点请调用 POST /api/v1/plugin/TgMusicSites/sites"},
+                                        ],
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+            {
+                "component": "VCard",
+                "props": {"variant": "outlined", "class": "mt-2"},
+                "content": [
+                    {
+                        "component": "VCardTitle",
+                        "props": {"class": "text-subtitle-1 font-weight-bold"},
+                        "text": "TG 站点列表",
+                    },
+                    {
+                        "component": "VCardText",
+                        "props": {"class": "py-2"},
+                        "content": site_rows,
+                    },
+                ],
+            },
         ]
 
     def stop_service(self) -> None:
