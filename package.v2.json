@@ -1118,5 +1118,18 @@
       "v1.1.0": "新增插件页「H&R 屏蔽记录」固定面板（Vue联邦），保留最近100条屏蔽记录",
       "v1.0.0": "初始版本：资源选择+资源下载双事件拦截，支持站点H&R标记种子与全站H&R站点屏蔽（联动H&R助手）"
     }
+  },
+  "TgMusicSites": {
+    "name": "TG音乐站点",
+    "description": "将 Telegram 音乐 Bot (@music_v1bot) 作为音乐资源站点接入 MoviePilot V3 搜索链，音乐订阅刷新时可搜索并下载 TG 音乐资源。",
+    "labels": "音乐,Telegram,资源站",
+    "version": "0.1.0",
+    "icon": "Telegram_A.png",
+    "author": "wenrouXN",
+    "level": 1,
+    "system_version": ">=3.0.0",
+    "history": {
+      "v0.1.0": "初始版本：TG bot 站点接入 V3 音乐搜索链"
+    }
   }
 }
