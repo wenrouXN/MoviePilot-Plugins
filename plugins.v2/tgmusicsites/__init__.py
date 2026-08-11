@@ -1,13 +1,21 @@
 """TG音乐站点插件：将 Telegram 音乐 Bot 作为音乐资源站点接入 MoviePilot V3 搜索链。
 
-v0.2.0 重大变更：Telethon 通信层抽离为独立服务 tg-music-bridge（NextFind 式集成）。
-插件只负责调 bridge 的 HTTP API，不再维护 Telethon/代理/节点/会话。
+v0.3.0 重大变更：Telethon 内嵌 + NextFind 式 Web 登录与管理。
+- Web 页面扫码登录（Telethon qr_login），session 持久化到插件 data，重装/升级不丢登录态
+- 支持添加多个 Bot，每个 Bot 可自定义搜索命令模板（如 /search {keyword}）
+- Web 页面试搜索：选 Bot + 输入关键词 → 显示结果列表
+- 搜索/下载拦截仍走 get_module 胁持（search_torrents / async_search_torrents / download）
+
+Telethon 事件循环策略：插件启动时创建专用后台线程 + 独立 asyncio loop，
+client 常驻绑定该 loop，所有操作通过 run_coroutine_threadsafe 提交，彻底避免跨事件循环问题。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import io
 import re
 import threading
 import time
@@ -28,10 +36,18 @@ from app.utils.string import StringUtils
 from fastapi import Request
 
 try:
-    import httpx
-    HTTPX_AVAILABLE = True
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+    from telethon.errors import SessionPasswordNeededError
+    from telethon.tl.types import (
+        Message,
+        MessageMediaDocument,
+        MessageMediaPhoto,
+        UpdateNewMessage,
+    )
+    TELEGRAM_AVAILABLE = True
 except ImportError:
-    HTTPX_AVAILABLE = False
+    TELEGRAM_AVAILABLE = False
 
 
 class TgMusicSites(_PluginBase):
@@ -39,9 +55,9 @@ class TgMusicSites(_PluginBase):
 
     # 插件元数据
     plugin_name = "TG音乐站点"
-    plugin_desc = "将 Telegram 音乐 Bot 作为音乐资源站点接入 MoviePilot V3 搜索链，通过轻量桥接服务 tg-music-bridge 实现 TG 搜索与下载。"
+    plugin_desc = "将 Telegram 音乐 Bot 作为音乐资源站点接入 MoviePilot V3 搜索链。支持 Web 页面扫码登录、多 Bot 管理与自定义搜索命令。"
     plugin_icon = "Telegram_A.png"
-    plugin_version = "0.2.0"
+    plugin_version = "0.3.0"
     plugin_label = "音乐,Telegram,资源站"
     plugin_author = "wenrouXN"
     plugin_config_prefix = "tgmusicsites_"
@@ -50,17 +66,31 @@ class TgMusicSites(_PluginBase):
 
     # 运行状态
     _enabled = False
-    _bot_username = ""
     _download_dir = ""
-    _bridge_url = ""
     _search_timeout = 30
     _download_timeout = 60
     _button_index = 1
+    _api_id = 0
+    _api_hash = ""
 
     # TG 站点标记
     _TG_SITE_ID = -1
     _TG_SITE_NAME = "TG音乐"
     _TG_URL_PREFIX = "tg://music/"
+
+    # Telethon 常驻线程与事件循环
+    _loop: Optional[asyncio.AbstractEventLoop] = None
+    _loop_thread: Optional[threading.Thread] = None
+    _client: Optional[TelegramClient] = None
+    _client_lock = threading.Lock()
+    _client_ready = False  # client 已创建并连接
+
+    # 登录状态机
+    _login_state = "idle"  # idle | qr_waiting | qr_scanned | logged_in | error
+    _login_qr_data = ""    # 二维码 token（原始 base64）
+    _login_qr_image = ""   # 二维码 PNG data URI（页面展示）
+    _login_error = ""
+    _login_qr_login = None  # qr_login 对象
 
     # 搜索会话去重
     _search_lock = threading.Lock()
@@ -77,27 +107,90 @@ class TgMusicSites(_PluginBase):
         self._enabled = bool(config.get("enabled"))
         if not self._enabled:
             return
-        self._bot_username = str(config.get("bot_username") or "music_v1bot").strip()
         self._download_dir = str(config.get("download_dir") or "/qbs/torrents/music/").strip()
-        self._bridge_url = str(config.get("bridge_url") or "").strip().rstrip("/")
         self._search_timeout = int(config.get("search_timeout") or 30)
         self._download_timeout = int(config.get("download_timeout") or 60)
         self._button_index = int(config.get("button_index") or 1)
+        self._api_id = int(config.get("api_id") or 0)
+        self._api_hash = str(config.get("api_hash") or "").strip()
 
-        if not HTTPX_AVAILABLE:
-            logger.error("TG音乐站点插件：httpx 未安装")
+        if not TELEGRAM_AVAILABLE:
+            logger.error("TG音乐站点插件：Telethon 未安装，请在插件依赖中安装 telethon>=1.34.0")
             self._enabled = False
             return
-        if not self._bridge_url:
-            logger.error("TG音乐站点插件：未配置桥接服务地址（bridge_url）")
-            self._enabled = False
+        # 启动 Telethon 后台线程（client 常驻，登录态从 data 恢复）
+        self._start_telegram_worker()
+        logger.info("TG音乐站点插件已启用：下载目录=%s，搜索超时=%ss",
+                    self._download_dir, self._search_timeout)
+
+    def _start_telegram_worker(self) -> None:
+        """启动 Telethon 专用后台线程。"""
+        if self._loop_thread and self._loop_thread.is_alive():
             return
-        if not self._bridge_url.startswith("http"):
-            logger.error("TG音乐站点插件：bridge_url 格式错误（需 http://host:port）")
-            self._enabled = False
-            return
-        logger.info("TG音乐站点插件已启用：bot=%s，bridge=%s，下载目录=%s",
-                    self._bot_username, self._bridge_url, self._download_dir)
+        self._loop_thread = threading.Thread(
+            target=self._telegram_loop_main, name="tgmusicsites-loop", daemon=True
+        )
+        self._loop_thread.start()
+
+    def _telegram_loop_main(self) -> None:
+        """Telethon 后台线程主函数：运行独立 asyncio loop。"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
+        try:
+            # 从 data 恢复 session（如有）
+            session_str = self.get_data("tg_session") or ""
+            if session_str:
+                try:
+                    client = TelegramClient(
+                        StringSession(session_str),
+                        self._api_id,
+                        self._api_hash,
+                        proxy=self._build_proxy(),
+                    )
+                    loop.run_until_complete(client.connect())
+                    if client.is_connected():
+                        self._client = client
+                        self._client_ready = True
+                        self._login_state = "logged_in"
+                        logger.info("TG音乐站点：Telethon 登录态已恢复")
+                    else:
+                        logger.warning("TG音乐站点：session 恢复失败，需重新登录")
+                        self._login_state = "idle"
+                except Exception as e:
+                    logger.error(f"TG音乐站点：session 恢复异常: {e}")
+                    self._login_state = "idle"
+            loop.run_forever()
+        except Exception as e:
+            logger.error(f"TG音乐站点：Telethon 线程异常退出: {e}")
+        finally:
+            loop.close()
+            self._loop = None
+
+    def _build_proxy(self) -> Optional[Tuple[str, str, int]]:
+        """构建 Telethon 代理配置（从 data 读取，默认 socks5://127.0.0.1:7891）。"""
+        proxy_cfg = self.get_data("tg_proxy") or {
+            "type": "socks5",
+            "host": "127.0.0.1",
+            "port": 7891,
+        }
+        ptype = str(proxy_cfg.get("type") or "socks5").lower()
+        host = str(proxy_cfg.get("host") or "127.0.0.1")
+        port = int(proxy_cfg.get("port") or 7891)
+        if ptype in ("socks5", "socks"):
+            return ("socks5", host, port)
+        elif ptype == "socks4":
+            return ("socks4", host, port)
+        elif ptype == "http":
+            return ("http", host, port)
+        return ("socks5", host, port)
+
+    def _submit(self, coro: Any, timeout: Optional[float] = None) -> Any:
+        """向 Telethon 专用 loop 提交协程并等待结果（线程安全）。"""
+        if not self._loop or self._loop.is_closed():
+            raise RuntimeError("Telethon 事件循环未就绪")
+        fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return fut.result(timeout=timeout)
 
     def get_state(self) -> bool:
         """获取插件启用状态。"""
@@ -112,18 +205,46 @@ class TgMusicSites(_PluginBase):
         """返回插件 API 列表。"""
         return [
             {
-                "path": "/sites",
-                "endpoint": self.api_sites,
+                "path": "/login/qr",
+                "endpoint": self.api_login_qr,
+                "methods": ["GET"],
+                "summary": "生成 TG 登录二维码",
+                "description": "生成 Telegram QR 登录二维码（需已配置 api_id/api_hash）",
+            },
+            {
+                "path": "/login/status",
+                "endpoint": self.api_login_status,
+                "methods": ["GET"],
+                "summary": "查询 TG 登录状态",
+                "description": "轮询登录状态：idle/qr_waiting/qr_scanned/logged_in/error",
+            },
+            {
+                "path": "/login/logout",
+                "endpoint": self.api_login_logout,
+                "methods": ["POST"],
+                "summary": "注销 TG 登录",
+                "description": "断开并清除 TG 登录态",
+            },
+            {
+                "path": "/bots",
+                "endpoint": self.api_bots,
                 "methods": ["GET", "POST", "DELETE"],
-                "summary": "TG音乐站点生命周期管理",
-                "description": "查询/添加/删除 TG 音乐站点配置",
+                "summary": "TG 音乐 Bot 管理",
+                "description": "查询/添加/删除 TG 音乐 Bot（含自定义搜索命令）",
+            },
+            {
+                "path": "/search",
+                "endpoint": self.api_try_search,
+                "methods": ["POST"],
+                "summary": "Web 试搜索",
+                "description": "在 Web 页面试搜索歌曲（选 Bot + 关键词）",
             },
             {
                 "path": "/test",
                 "endpoint": self.api_test,
                 "methods": ["GET"],
-                "summary": "测试 TG 音乐 Bot 连接",
-                "description": "测试 tg-music-bridge 服务连接",
+                "summary": "测试 TG 连接",
+                "description": "测试 Telethon 连接状态",
             },
         ]
 
@@ -138,7 +259,7 @@ class TgMusicSites(_PluginBase):
         }
 
     def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
-        """返回插件配置表单与默认配置。TG 登录由 tg-music-bridge 服务负责，插件只需配置桥接地址。"""
+        """返回插件配置表单与默认配置。"""
         return [
             {
                 "component": "VForm",
@@ -150,17 +271,17 @@ class TgMusicSites(_PluginBase):
                     {
                         "component": "VTextField",
                         "props": {
-                            "model": "bridge_url",
-                            "label": "桥接服务地址",
-                            "hint": "tg-music-bridge 服务地址，如 http://192.168.1.68:8300"
+                            "model": "api_id",
+                            "label": "Telegram API ID",
+                            "hint": "my.telegram.org 获取（登录用，登录成功后可不填）"
                         }
                     },
                     {
                         "component": "VTextField",
                         "props": {
-                            "model": "bot_username",
-                            "label": "TG 音乐 Bot 用户名",
-                            "hint": "默认 music_v1bot"
+                            "model": "api_hash",
+                            "label": "Telegram API Hash",
+                            "hint": "my.telegram.org 获取（登录用，登录成功后可不填）"
                         }
                     },
                     {
@@ -177,7 +298,7 @@ class TgMusicSites(_PluginBase):
                     },
                     {
                         "component": "VTextField",
-                        "props": {"model": "download_timeout", "label": "下载超时(秒)", "hint": "默认 60"}
+                        "props": {"model": "download_timeout", "label": "下载超时(秒)", "hint": "默认 120"}
                     },
                     {
                         "component": "VTextField",
@@ -189,18 +310,18 @@ class TgMusicSites(_PluginBase):
                             "type": "info",
                             "dense": True,
                             "class": "mt-2",
-                            "text": "Telegram 登录由独立服务 tg-music-bridge 负责（凭据在服务端配置，长期有效）。插件仅通过 HTTP 调用该服务，无需 Telethon/代理/会话配置。"
+                            "text": "登录方式：在插件详情页点击『生成登录二维码』，用手机 Telegram 扫码即可。api_id/api_hash 仅首次登录需要，登录成功后 session 自动持久化，重装/升级不丢失。"
                         }
                     }
                 ]
             }
         ], {
             "enabled": False,
-            "bridge_url": "http://192.168.1.68:8300",
-            "bot_username": "music_v1bot",
+            "api_id": "",
+            "api_hash": "",
             "download_dir": "/qbs/torrents/music/",
             "search_timeout": 30,
-            "download_timeout": 60,
+            "download_timeout": 120,
             "button_index": 1
         }
 
@@ -212,45 +333,55 @@ class TgMusicSites(_PluginBase):
                     "component": "VAlert",
                     "props": {
                         "type": "warning",
-                        "text": "插件未启用，请在插件配置中启用后查看详情。"
+                        "text": "插件未启用，请在插件配置中启用并填写 api_id/api_hash 后查看详情。"
                     },
                 }
             ]
-        sites = self.get_data("tg_sites") or {}
-        conn = self.get_data("tg_conn_status") or {}
-        conn_state = "未测试"
-        if conn.get("success") is True:
-            conn_state = f"✅ 已连接 ({conn.get('time', '')})"
-        elif conn.get("success") is False:
-            conn_state = f"❌ 连接失败 ({conn.get('time', '')})"
-        bridge_ok = bool(self._bridge_url)
-        bridge_state = f"✅ {self._bridge_url}" if bridge_ok else "❌ 未配置"
-        # 默认站点 = 配置的 bot（自动生成，无需手动添加）；tg_sites 里的为附加站点
-        default_site = {
-            "component": "div",
-            "props": {"class": "d-flex align-center justify-space-between py-1"},
-            "content": [
+        bots = self.get_data("tg_bots") or {}
+        login_state = self._login_state
+        login_text = {
+            "idle": "未登录",
+            "qr_waiting": "等待扫码",
+            "qr_scanned": "已扫码，请在手机确认",
+            "logged_in": "已登录",
+            "error": f"登录失败: {self._login_error}",
+        }.get(login_state, login_state)
+        login_ok = login_state == "logged_in"
+        conn_state = f"✅ {login_text}" if login_ok else f"❌ {login_text}"
+        # 二维码展示区块（登录中时显示）
+        qr_section = []
+        if self._login_qr_image:
+            qr_section = [
                 {
-                    "component": "div",
-                    "props": {"class": "text-body-2"},
-                    "text": f"⭐ 默认站点：@{self._bot_username}（配置项）",
-                },
-                {
-                    "component": "div",
-                    "props": {"class": "text-body-2 text-grey"},
-                    "text": "启用中",
-                },
-            ],
-        }
-        extra_rows = [
-            {
+                    "component": "VCardText",
+                    "props": {"class": "py-2 text-center"},
+                    "content": [
+                        {
+                            "component": "VImg",
+                            "props": {
+                                "src": self._login_qr_image,
+                                "height": 220,
+                                "width": 220,
+                                "contain": True,
+                                "class": "mx-auto"
+                            }
+                        },
+                        {"component": "div", "props": {"class": "text-body-2 text-grey pt-2"}, "text": "用手机 Telegram 扫码登录"},
+                    ],
+                }
+            ]
+        # Bot 列表行
+        bot_rows = []
+        for k, v in bots.items():
+            cmd = v.get("search_command") or "/search {keyword}"
+            bot_rows.append({
                 "component": "div",
                 "props": {"class": "d-flex align-center justify-space-between py-1"},
                 "content": [
                     {
                         "component": "div",
                         "props": {"class": "text-body-2"},
-                        "text": f"{v.get('name', 'TG音乐')} (@{v.get('bot_username', '')})",
+                        "text": f"{v.get('name', 'TG音乐')} (@{v.get('bot_username', '')}) 命令: {cmd}",
                     },
                     {
                         "component": "VBtn",
@@ -263,17 +394,14 @@ class TgMusicSites(_PluginBase):
                         "text": "删除",
                         "events": {
                             "click": {
-                                "api": "plugin/TgMusicSites/sites",
+                                "api": "plugin/TgMusicSites/bots",
                                 "method": "delete",
-                                "params": {"site_id": k},
+                                "params": {"bot_id": k},
                             }
                         },
                     },
                 ],
-            }
-            for k, v in sites.items()
-        ]
-        site_rows = [default_site] + (extra_rows or [])
+            })
         return [
             {
                 "component": "VRow",
@@ -290,18 +418,18 @@ class TgMusicSites(_PluginBase):
                                     {
                                         "component": "VCardTitle",
                                         "props": {"class": "text-subtitle-1 font-weight-bold"},
-                                        "text": "运行状态",
+                                        "text": "TG 登录状态",
                                     },
                                     {
                                         "component": "VCardText",
                                         "props": {"class": "py-2"},
                                         "content": [
-                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"Bot：@{self._bot_username}"},
+                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"登录状态：{conn_state}"},
                                             {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"下载目录：{self._download_dir}"},
-                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"桥接服务：{bridge_state}"},
-                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"连接状态：{conn_state}"},
+                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"Bot 数量：{len(bots)} 个"},
                                         ],
                                     },
+                                    *qr_section,
                                     {
                                         "component": "VCardActions",
                                         "props": {"class": "pt-0"},
@@ -311,13 +439,43 @@ class TgMusicSites(_PluginBase):
                                                 "props": {
                                                     "color": "primary",
                                                     "variant": "tonal",
-                                                    "prepend-icon": "mdi-connection",
+                                                    "prepend-icon": "mdi-qrcode",
                                                 },
-                                                "text": "测试连接",
+                                                "text": "生成登录二维码",
                                                 "events": {
                                                     "click": {
-                                                        "api": "plugin/TgMusicSites/test",
+                                                        "api": "plugin/TgMusicSites/login/qr",
                                                         "method": "get",
+                                                    }
+                                                },
+                                            },
+                                            {
+                                                "component": "VBtn",
+                                                "props": {
+                                                    "color": "secondary",
+                                                    "variant": "tonal",
+                                                    "prepend-icon": "mdi-refresh",
+                                                },
+                                                "text": "刷新状态",
+                                                "events": {
+                                                    "click": {
+                                                        "api": "plugin/TgMusicSites/login/status",
+                                                        "method": "get",
+                                                    }
+                                                },
+                                            },
+                                            {
+                                                "component": "VBtn",
+                                                "props": {
+                                                    "color": "error",
+                                                    "variant": "tonal",
+                                                    "prepend-icon": "mdi-logout",
+                                                },
+                                                "text": "注销登录",
+                                                "events": {
+                                                    "click": {
+                                                        "api": "plugin/TgMusicSites/login/logout",
+                                                        "method": "post",
                                                     }
                                                 },
                                             },
@@ -338,14 +496,47 @@ class TgMusicSites(_PluginBase):
                                     {
                                         "component": "VCardTitle",
                                         "props": {"class": "text-subtitle-1 font-weight-bold"},
-                                        "text": "站点管理",
+                                        "text": "试搜索",
                                     },
                                     {
                                         "component": "VCardText",
                                         "props": {"class": "py-2"},
                                         "content": [
-                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"站点数：1 个默认 + {len(sites)} 个附加"},
-                                            {"component": "div", "props": {"class": "text-body-2 py-1 text-grey"}, "text": "默认站点由配置 bot_username 自动生成，无需手动添加；附加站点通过 API 管理"},
+                                            {
+                                                "component": "VTextField",
+                                                "props": {
+                                                    "model": "try_keyword",
+                                                    "label": "搜索关键词",
+                                                    "hint": "输入歌曲名，选择 Bot 后搜索"
+                                                }
+                                            },
+                                            {
+                                                "component": "VSelect",
+                                                "props": {
+                                                    "model": "try_bot",
+                                                    "label": "选择 Bot",
+                                                    "items": [
+                                                        {"title": v.get("name", k), "value": v.get("bot_username", "")}
+                                                        for k, v in bots.items()
+                                                    ] or [{"title": "请先添加 Bot", "value": ""}]
+                                                }
+                                            },
+                                            {
+                                                "component": "VBtn",
+                                                "props": {
+                                                    "color": "success",
+                                                    "variant": "tonal",
+                                                    "prepend-icon": "mdi-magnify",
+                                                },
+                                                "text": "试搜索",
+                                                "events": {
+                                                    "click": {
+                                                        "api": "plugin/TgMusicSites/search",
+                                                        "method": "post",
+                                                        "params": {"keyword": "try_keyword", "bot_username": "try_bot"},
+                                                    }
+                                                },
+                                            },
                                         ],
                                     },
                                 ],
@@ -361,12 +552,18 @@ class TgMusicSites(_PluginBase):
                     {
                         "component": "VCardTitle",
                         "props": {"class": "text-subtitle-1 font-weight-bold"},
-                        "text": "TG 站点列表",
+                        "text": "Bot 列表",
                     },
                     {
                         "component": "VCardText",
                         "props": {"class": "py-2"},
-                        "content": site_rows,
+                        "content": bot_rows or [
+                            {
+                                "component": "div",
+                                "props": {"class": "text-body-2 text-grey"},
+                                "text": "暂无 Bot，请在插件配置页填写 bot_username 或通过 API 添加",
+                            }
+                        ],
                     },
                 ],
             },
@@ -374,95 +571,318 @@ class TgMusicSites(_PluginBase):
 
     def stop_service(self) -> None:
         """停止插件后台服务并释放资源。"""
-        pass
+        # 断开 Telethon client（在专用 loop 内）
+        if self._client and self._loop and not self._loop.is_closed():
+            try:
+                client = self._client
+                loop = self._loop
+                def _close():
+                    try:
+                        loop.run_until_complete(client.disconnect())
+                    except Exception:
+                        pass
+                threading.Thread(target=_close, daemon=True).start()
+            except Exception:
+                pass
+        self._client = None
+        self._client_ready = False
+        self._login_state = "idle"
+        self._login_qr_data = ""
+        self._login_qr_login = None
 
-    # ==================== API ====================
+    # ==================== 登录 API ====================
 
-    async def api_sites(self, request: Request) -> Dict[str, Any]:
-        """TG音乐站点生命周期管理 API。"""
+    async def api_login_qr(self) -> Dict[str, Any]:
+        """生成 TG 登录二维码（返回 PNG data URI 供页面展示）。"""
+        if not self._api_id or not self._api_hash:
+            return {"success": False, "message": "请先在插件配置中填写 api_id / api_hash"}
+        if self._client_ready:
+            return {"success": True, "message": "已登录，无需重复扫码", "state": "logged_in"}
+        if not self._loop or self._loop.is_closed():
+            self._start_telegram_worker()
+            # 等待 loop 就绪
+            for _ in range(50):
+                if self._loop and not self._loop.is_closed():
+                    break
+                await asyncio.sleep(0.1)
+        try:
+            qr_data = await asyncio.to_thread(
+                self._submit, self._do_qr_login(), timeout=20
+            )
+            if qr_data:
+                self._login_state = "qr_waiting"
+                self._login_qr_data = qr_data
+                # 生成二维码 PNG data URI（Telethon token → tg://login?token= → QR）
+                try:
+                    self._login_qr_image = self._make_qr_image(qr_data)
+                except Exception as e:
+                    logger.error(f"TG音乐站点：二维码图片生成失败: {e}")
+                    self._login_qr_image = ""
+                # 启动后台轮询登录结果
+                threading.Thread(target=self._poll_qr_login, daemon=True).start()
+                return {
+                    "success": True,
+                    "qr_token": qr_data,
+                    "qr_image": self._login_qr_image,
+                    "state": "qr_waiting",
+                }
+            return {"success": False, "message": "二维码生成失败"}
+        except Exception as e:
+            self._login_state = "error"
+            self._login_error = str(e)
+            return {"success": False, "message": f"二维码生成失败: {e}"}
+
+    @staticmethod
+    def _make_qr_image(login_url: str) -> str:
+        """将 TG 登录 URL 转为二维码 PNG data URI。"""
+        import qrcode
+        qr = qrcode.QRCode(box_size=8, border=2)
+        qr.add_data(login_url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        return f"data:image/png;base64,{b64}"
+
+    async def _do_qr_login(self) -> Optional[str]:
+        """在专用 loop 内执行 qr_login，返回二维码 URL。"""
+        try:
+            client = TelegramClient(
+                StringSession(),
+                self._api_id,
+                self._api_hash,
+                proxy=self._build_proxy(),
+            )
+            await client.connect()
+            qr_login = await client.qr_login()
+            self._client = client
+            self._login_qr_login = qr_login
+            # QRLogin.url 即 tg://login 二维码内容，可直接用于生成二维码
+            url = qr_login.url
+            if url:
+                return url
+            return None
+        except Exception as e:
+            logger.error(f"TG音乐站点：qr_login 异常: {e}")
+            return None
+
+    def _poll_qr_login(self) -> None:
+        """后台轮询扫码登录结果（专用 loop 内）。"""
+        if not self._loop or self._loop.is_closed():
+            return
+        async def _poll():
+            qr = self._login_qr_login
+            if not qr:
+                return
+            try:
+                # 等待扫码确认（qr_login.wait 直到登录完成）
+                await qr.wait(timeout=60)
+                if self._client and self._client.is_connected():
+                    me = await self._client.get_me()
+                    # 保存 session
+                    session_str = StringSession.save(self._client.session)
+                    self.save_data("tg_session", session_str)
+                    self._client_ready = True
+                    self._login_state = "logged_in"
+                    self._login_qr_data = ""
+                    self._login_qr_image = ""
+                    self._login_qr_login = None
+                    logger.info(f"TG音乐站点：扫码登录成功: {me.username or me.first_name}")
+            except asyncio.TimeoutError:
+                # 未扫码或超时：保持等待状态，二维码可重新生成
+                self._login_state = "qr_waiting"
+                logger.info("TG音乐站点：二维码等待扫码超时，可重新生成")
+            except Exception as e:
+                self._login_state = "error"
+                self._login_error = str(e)
+                logger.error(f"TG音乐站点：扫码登录失败: {e}")
+        try:
+            self._submit(_poll(), timeout=90)
+        except Exception as e:
+            logger.error(f"TG音乐站点：登录轮询异常: {e}")
+
+    async def api_login_status(self) -> Dict[str, Any]:
+        """查询 TG 登录状态。"""
+        # 如果 client 已连接但状态未同步（如 QR 登录完成后），同步一次
+        if self._client_ready and self._client and self._client.is_connected() and self._login_state != "logged_in":
+            self._login_state = "logged_in"
+        # 如果已标记登录但 client 掉线，状态修正为错误
+        if self._login_state == "logged_in" and (not self._client_ready or not self._client or not self._client.is_connected()):
+            self._login_state = "idle"
+        return {
+            "success": True,
+            "state": self._login_state,
+            "connected": self._client_ready,
+            "user": self._get_login_user(),
+            "message": {
+                "idle": "未登录",
+                "qr_waiting": "等待扫码",
+                "qr_scanned": "已扫码，请在手机确认",
+                "logged_in": "已登录",
+                "error": f"登录失败: {self._login_error}",
+            }.get(self._login_state, self._login_state),
+        }
+
+    def _get_login_user(self) -> str:
+        """获取当前登录用户。"""
+        try:
+            if self._client and self._client.is_connected():
+                async def _me():
+                    me = await self._client.get_me()
+                    return me.username or me.first_name or ""
+                return self._submit(_me(), timeout=10)
+        except Exception:
+            pass
+        return ""
+
+    async def api_login_logout(self) -> Dict[str, Any]:
+        """注销 TG 登录。"""
+        try:
+            if self._client and self._loop and not self._loop.is_closed():
+                async def _logout():
+                    try:
+                        await self._client.log_out()
+                    except Exception:
+                        pass
+                    await self._client.disconnect()
+                self._submit(_logout(), timeout=30)
+            self._client = None
+            self._client_ready = False
+            self._login_state = "idle"
+            self._login_qr_data = ""
+            self._login_qr_login = None
+            # 清除持久化 session
+            self.save_data("tg_session", "")
+            return {"success": True, "message": "已注销登录"}
+        except Exception as e:
+            return {"success": False, "message": f"注销失败: {e}"}
+
+    # ==================== Bot 管理 API ====================
+
+    async def api_bots(self, request: Request) -> Dict[str, Any]:
+        """TG 音乐 Bot 管理 API（GET/POST/DELETE）。"""
         method = request.method
         if method == "GET":
-            sites = self.get_data("tg_sites") or {}
-            return {"success": True, "data": sites}
+            bots = self.get_data("tg_bots") or {}
+            return {"success": True, "data": bots}
         elif method == "POST":
             try:
                 body = await request.json() or {}
             except Exception:
                 body = {}
-            sites = self.get_data("tg_sites") or {}
-            site_id = str(body.get("site_id") or f"tg_{int(time.time())}")
-            sites[site_id] = {
-                "bot_username": body.get("bot_username") or self._bot_username,
-                "name": body.get("name") or "TG音乐",
+            bots = self.get_data("tg_bots") or {}
+            bot_id = str(body.get("bot_id") or f"bot_{int(time.time())}")
+            bot_username = str(body.get("bot_username") or "").strip().lstrip("@")
+            if not bot_username:
+                return {"success": False, "message": "bot_username 不能为空"}
+            bots[bot_id] = {
+                "bot_username": bot_username,
+                "name": body.get("name") or bot_username,
+                "search_command": str(body.get("search_command") or "/search {keyword}").strip(),
+                "button_index": int(body.get("button_index") or self._button_index or 1),
                 "enabled": body.get("enabled", True),
                 "created": time.strftime("%Y-%m-%d %H:%M:%S")
             }
-            self.save_data("tg_sites", sites)
-            return {"success": True, "data": sites}
+            self.save_data("tg_bots", bots)
+            return {"success": True, "data": bots}
         elif method == "DELETE":
             try:
                 body = await request.json() or {}
             except Exception:
                 body = {}
-            site_id = body.get("site_id")
-            sites = self.get_data("tg_sites") or {}
-            if site_id and site_id in sites:
-                del sites[site_id]
-                self.save_data("tg_sites", sites)
-                return {"success": True, "data": sites}
-            return {"success": False, "message": f"站点 {site_id} 不存在"}
+            bot_id = body.get("bot_id")
+            bots = self.get_data("tg_bots") or {}
+            if bot_id and bot_id in bots:
+                del bots[bot_id]
+                self.save_data("tg_bots", bots)
+                return {"success": True, "data": bots}
+            return {"success": False, "message": f"Bot {bot_id} 不存在"}
+
+    # ==================== 试搜索 API ====================
+
+    async def api_try_search(self, request: Request) -> Dict[str, Any]:
+        """Web 页面试搜索。"""
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        keyword = str(body.get("keyword") or "").strip()
+        bot_username = str(body.get("bot_username") or "").strip().lstrip("@")
+        if not keyword:
+            return {"success": False, "message": "关键词不能为空"}
+        if not self._client_ready:
+            return {"success": False, "message": "TG 未登录，请先扫码登录"}
+        try:
+            results = await asyncio.to_thread(self._tg_search_bot, keyword, bot_username)
+            return {"success": True, "count": len(results), "results": results}
+        except Exception as e:
+            return {"success": False, "message": f"搜索失败: {e}"}
 
     async def api_test(self) -> Dict[str, Any]:
-        """测试 tg-music-bridge 服务连接，并将结果保存供详情页展示。"""
-        if not self._bridge_url:
-            result = {"success": False, "message": "未配置桥接服务地址"}
-            self.save_data("tg_conn_status", {
-                "time": time.strftime("%m-%d %H:%M:%S"),
-                "success": False,
-                "message": result["message"],
-            })
-            return result
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(f"{self._bridge_url}/health")
-                data = resp.json()
-            if resp.status_code == 200 and data.get("connected"):
-                user = data.get("user") or ""
-                result = {"success": True, "message": f"连接成功: {user}"}
-            else:
-                result = {"success": False, "message": f"桥接服务未连接: {data.get('last_conn', {}).get('message', 'unknown')}"}
-        except Exception as e:
-            result = {"success": False, "message": f"连接失败: {str(e)}"}
-        self.save_data("tg_conn_status", {
-            "time": time.strftime("%m-%d %H:%M:%S"),
-            "success": result["success"],
-            "message": result["message"],
-        })
-        return result
-
-    # ==================== Bridge HTTP 客户端 ====================
-
-    def _bridge_call(self, path: str, payload: Optional[Dict[str, Any]] = None,
-                     timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
-        """调用 bridge HTTP API（同步包装，供 asyncio.to_thread 使用）。"""
-        import urllib.request
-        import urllib.error
-        import json as _json
-        url = f"{self._bridge_url}{path}"
-        data = _json.dumps(payload).encode() if payload else None
-        req = urllib.request.Request(url, data=data)
-        if payload:
-            req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout or max(self._search_timeout + 10, 60)) as resp:
-                return _json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
+        """测试 Telethon 连接状态。"""
+        if not TELEGRAM_AVAILABLE:
+            return {"success": False, "message": "Telethon 未安装"}
+        if not self._api_id or not self._api_hash:
+            return {"success": False, "message": "未配置 api_id/api_hash"}
+        if self._client_ready and self._client and self._client.is_connected():
+            user = ""
             try:
-                return _json.loads(e.read().decode())
+                async def _me():
+                    me = await self._client.get_me()
+                    return me.username or me.first_name or ""
+                user = self._submit(_me(), timeout=10)
             except Exception:
-                return {"success": False, "message": f"HTTP {e.code}"}
+                pass
+            return {"success": True, "message": f"连接成功: {user}"}
+        # 尝试临时连接验证
+        try:
+            from telethon import TelegramClient
+            from telethon.sessions import StringSession
+            session_str = self.get_data("tg_session") or ""
+            client = TelegramClient(
+                StringSession(session_str) if session_str else StringSession(),
+                self._api_id, self._api_hash,
+                proxy=self._build_proxy(),
+            )
+            connected = await asyncio.to_thread(self._connect_test, client)
+            if connected:
+                user = await asyncio.to_thread(self._get_test_user, client)
+                await asyncio.to_thread(self._disconnect_test, client)
+                return {"success": True, "message": f"连接成功: {user}"}
+            return {"success": False, "message": "连接失败：无法连接 Telegram 服务器"}
         except Exception as e:
-            return {"success": False, "message": str(e)}
+            return {"success": False, "message": f"连接失败: {str(e)}"}
+
+    @staticmethod
+    def _connect_test(client: Any) -> bool:
+        """测试连接（同步包装）。"""
+        import asyncio as _asyncio
+        try:
+            _asyncio.new_event_loop().run_until_complete(client.connect())
+            return bool(client.is_connected())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _get_test_user(client: Any) -> str:
+        """获取测试用户（同步包装）。"""
+        import asyncio as _asyncio
+        try:
+            loop = _asyncio.new_event_loop()
+            me = loop.run_until_complete(client.get_me())
+            return me.username or me.first_name or ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _disconnect_test(client: Any) -> None:
+        """断开测试连接（同步包装）。"""
+        import asyncio as _asyncio
+        try:
+            _asyncio.new_event_loop().run_until_complete(client.disconnect())
+        except Exception:
+            pass
 
     # ==================== 搜索拦截 ====================
 
@@ -503,32 +923,138 @@ class TgMusicSites(_PluginBase):
             return True
 
     def _tg_search(self, keyword: str, page: Optional[int] = 0) -> List[Any]:
-        """执行 TG bot 搜索（调 bridge），返回 TorrentInfo 列表。"""
+        """执行 TG bot 搜索（Telethon 直连），返回 TorrentInfo 列表。"""
         if page and page > 1:
             return []
-        if not self._bot_username:
-            logger.error("TG音乐站点：未配置 bot 用户名")
+        bots = self.get_data("tg_bots") or {}
+        if not bots:
+            logger.info(f"TG音乐站点：未配置 Bot，跳过搜索 '{keyword}'")
             return []
         try:
-            resp = self._bridge_call("/search", {
-                "keyword": keyword,
-                "bot_username": self._bot_username,
-            })
-            if not resp or not resp.get("success"):
-                logger.error(f"TG音乐站点：bridge 搜索失败: {resp}")
-                return []
-            results = resp.get("results") or []
-            if not results:
+            all_results = []
+            for bot_id, bot_cfg in bots.items():
+                if not bot_cfg.get("enabled", True):
+                    continue
+                bot_username = bot_cfg.get("bot_username") or ""
+                if not bot_username:
+                    continue
+                try:
+                    results = self._tg_search_bot(keyword, bot_username, bot_cfg)
+                    # 标记结果所属 bot
+                    for r in results:
+                        r["bot_username"] = bot_username
+                        r["button_index"] = bot_cfg.get("button_index") or self._button_index or 1
+                    all_results.extend(results)
+                except Exception as e:
+                    logger.error(f"TG音乐站点：Bot @{bot_username} 搜索失败: {e}")
+            if not all_results:
                 logger.info(f"TG音乐站点：搜索 '{keyword}' 无结果")
                 return []
             # 缓存结果，供下载时使用
             with self._search_lock:
-                self._last_search_results = results
-            logger.info(f"TG音乐站点：搜索 '{keyword}' 返回 {len(results)} 条结果")
-            return self._results_to_torrents(results)
+                self._last_search_results = all_results
+            logger.info(f"TG音乐站点：搜索 '{keyword}' 返回 {len(all_results)} 条结果")
+            return self._results_to_torrents(all_results)
         except Exception as e:
             logger.error(f"TG音乐站点搜索失败: {str(e)}")
             return []
+
+    def _tg_search_bot(
+        self, keyword: str, bot_username: str, bot_cfg: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """对单个 Bot 执行搜索，返回结果列表（含 button_data 供下载）。"""
+        if not self._client_ready or not self._client:
+            raise RuntimeError("TG 未登录")
+        bot_cfg = bot_cfg or {}
+        search_command = str(bot_cfg.get("search_command") or "/search {keyword}")
+        button_index = int(bot_cfg.get("button_index") or self._button_index or 1)
+        command = search_command.replace("{keyword}", keyword)
+        logger.info(f"TG音乐站点：向 @{bot_username} 发送命令: {command}")
+        async def _search():
+            client = self._client
+            # 解析 bot 实体
+            try:
+                bot_entity = await client.get_input_entity(bot_username)
+            except Exception:
+                bot_entity = bot_username
+            # 记录发送前最新消息 id
+            try:
+                before = await client.get_messages(bot_entity, limit=1)
+                before_id = before[0].id if before else 0
+            except Exception:
+                before_id = 0
+            # 发送搜索命令
+            await client.send_message(bot_entity, command)
+            # 轮询回复（最多 search_timeout 秒）
+            results = []
+            deadline = time.time() + self._search_timeout
+            seen_ids = set()
+            while time.time() < deadline:
+                await asyncio.sleep(1)
+                try:
+                    messages = await client.get_messages(bot_entity, limit=10)
+                except Exception:
+                    continue
+                for m in messages:
+                    if m.id <= before_id or m.id in seen_ids:
+                        continue
+                    if not m.message:
+                        continue
+                    seen_ids.add(m.id)
+                    # 识别搜索结果消息（含数字编号特征）
+                    parsed = self._parse_result_message(m)
+                    if parsed:
+                        results.extend(parsed)
+                if results:
+                    break
+            return results
+        try:
+            return self._submit(_search(), timeout=self._search_timeout + 15)
+        except Exception as e:
+            logger.error(f"TG音乐站点：@{bot_username} 搜索异常: {e}")
+            return []
+
+    def _parse_result_message(self, msg: Any) -> List[Dict[str, Any]]:
+        """解析 Bot 搜索结果消息，提取候选与按钮数据。"""
+        text = (msg.message or "").strip()
+        if not text:
+            return []
+        # 寻找编号条目：数字. 标题 或 数字、标题
+        entries = []
+        for line in text.splitlines():
+            line = line.strip()
+            m = re.match(r"^(\d+)[.、．]\s*(.+)$", line)
+            if m:
+                title = m.group(2).strip()
+                if title:
+                    entries.append({"index": int(m.group(1)), "title": title})
+        if not entries:
+            return []
+        # 提取按钮数据（reply_markup）
+        button_data = ""
+        button_text = ""
+        try:
+            if msg.reply_markup and msg.reply_markup.rows:
+                row = msg.reply_markup.rows[0]
+                if row.buttons:
+                    btn = row.buttons[0]
+                    button_data = getattr(btn, "data", b"") or b""
+                    if isinstance(button_data, bytes):
+                        button_data = base64.b64encode(button_data).decode()
+                    button_text = getattr(btn, "text", "") or ""
+        except Exception:
+            pass
+        results = []
+        for e in entries:
+            results.append({
+                "index": e["index"],
+                "title": e["title"],
+                "description": text,
+                "button_data": button_data,
+                "button_text": button_text,
+                "msg_id": getattr(msg, "id", 0),
+            })
+        return results
 
     def _results_to_torrents(self, results: List[Dict[str, Any]]) -> List[Any]:
         """将 TG 搜索结果转换为 TorrentInfo 列表。"""
@@ -554,7 +1080,7 @@ class TgMusicSites(_PluginBase):
                 pubdate=time.strftime("%Y-%m-%d %H:%M:%S"),
                 category=MediaType.MUSIC.value,
                 labels=["TG音乐"],
-                page_url=f"https://t.me/{self._bot_username}",
+                page_url=f"https://t.me/{r.get('bot_username') or ''}" if r.get("bot_username") else "",
             )
             torrents.append(torrent)
         return torrents
@@ -571,7 +1097,7 @@ class TgMusicSites(_PluginBase):
         label: Optional[str] = None,
         downloader: Optional[str] = None,
     ) -> Optional[Tuple[Optional[str], Optional[str], Optional[str], str]]:
-        """胁持 download：当下载 TG 资源时走 bridge 下载。"""
+        """胁持 download：当下载 TG 资源时走 Telethon 下载。"""
         # 只处理 TG 链接
         if isinstance(content, str) and content.startswith(self._TG_URL_PREFIX):
             logger.info(f"TG音乐站点：开始下载 TG 资源 {content}")
@@ -586,7 +1112,9 @@ class TgMusicSites(_PluginBase):
     def _tg_download_file(
         self, enclosure: str, download_dir: Path
     ) -> Tuple[Optional[str], Optional[str], Optional[str], str]:
-        """执行 TG bot 文件下载（调 bridge）。"""
+        """执行 TG bot 文件下载（Telethon 直连）。"""
+        if not self._client_ready or not self._client:
+            return None, None, None, "TG 未登录"
         # 从 enclosure 反查缓存的结果
         uid = enclosure.replace(self._TG_URL_PREFIX, "")
         result = None
@@ -599,23 +1127,91 @@ class TgMusicSites(_PluginBase):
                     break
         if not result:
             return None, None, None, f"找不到 TG 资源 {enclosure} 的下载信息"
-        # 执行下载（调 bridge）
+        # 执行下载
         try:
             target_dir = str(Path(self._download_dir))
-            resp = self._bridge_call("/download", {
-                "msg_id": result.get("msg_id"),
-                "button_data": result.get("button_data"),
-                "target_dir": target_dir,
-            }, timeout=self._download_timeout + 60)
-            if not resp or not resp.get("success"):
-                return None, None, None, f"TG 下载失败: {(resp or {}).get('message', 'bridge 无响应')}"
-            file_path = resp.get("file") or ""
+            file_path = self._submit(
+                self._do_download(result, target_dir),
+                timeout=self._download_timeout + 60,
+            )
             if not file_path:
-                return None, None, None, "TG 下载失败：bridge 未返回文件路径"
-            # 生成伪 hash（用文件路径 md5）
+                return None, None, None, "TG 下载失败：未获取到文件"
             fake_hash = hashlib.md5(str(file_path).encode()).hexdigest()[:40]
             logger.info(f"TG音乐站点：文件已下载到 {file_path}")
             return "TGMusic", fake_hash, "NoSubfolder", ""
         except Exception as e:
             logger.error(f"TG音乐站点下载异常: {str(e)}")
             return None, None, None, f"TG下载异常: {str(e)}"
+
+    async def _do_download(self, result: Dict[str, Any], target_dir: str) -> Optional[str]:
+        """在专用 loop 内执行下载：点击按钮 → 轮询新消息 → download_media。"""
+        client = self._client
+        msg_id = int(result.get("msg_id") or 0)
+        button_data_b64 = result.get("button_data") or ""
+        button_index = int(result.get("button_index") or self._button_index or 1)
+        try:
+            button_data = base64.b64decode(button_data_b64) if button_data_b64 else b""
+            # 获取消息实体
+            bot_username = result.get("bot_username") or ""
+            try:
+                bot_entity = await client.get_input_entity(bot_username) if bot_username else None
+            except Exception:
+                bot_entity = None
+            # 点击按钮触发下载
+            if bot_entity and msg_id and button_data:
+                try:
+                    await client(GetBotCallbackAnswerRequest(
+                        peer=bot_entity,
+                        msg_id=msg_id,
+                        data=button_data,
+                    ))
+                except Exception as e:
+                    logger.debug(f"TG音乐站点：点击按钮回调忽略（部分 bot 无回调）: {e}")
+            # 轮询 bot 发来的新文件消息
+            Path(target_dir).mkdir(parents=True, exist_ok=True)
+            deadline = time.time() + self._download_timeout
+            file_path = ""
+            last_id = msg_id
+            while time.time() < deadline:
+                await asyncio.sleep(2)
+                try:
+                    if bot_entity:
+                        messages = await client.get_messages(bot_entity, limit=10)
+                        for m in messages:
+                            if m.id <= last_id:
+                                continue
+                            last_id = max(last_id, m.id)
+                            if m.media:
+                                fname = self._media_filename(m)
+                                if fname:
+                                    path = await client.download_media(m, file=target_dir)
+                                    if path:
+                                        file_path = str(path)
+                                        # 无后缀补 .mp3
+                                        if not Path(file_path).suffix:
+                                            new_path = f"{file_path}.mp3"
+                                            Path(file_path).rename(new_path)
+                                            file_path = new_path
+                                        return file_path
+                except Exception as e:
+                    logger.debug(f"TG音乐站点：下载轮询异常: {e}")
+            return file_path or None
+        except Exception as e:
+            logger.error(f"TG音乐站点：_do_download 异常: {e}")
+            return None
+
+    def _media_filename(self, m: Any) -> str:
+        """提取媒体文件名。"""
+        try:
+            if m.media and hasattr(m.media, "document"):
+                doc = m.media.document
+                for attr in doc.attributes:
+                    if hasattr(attr, "file_name") and attr.file_name:
+                        return attr.file_name
+                return f"tg_music_{m.id}"
+            elif m.media and hasattr(m.media, "photo"):
+                return f"tg_music_{m.id}.jpg"
+        except Exception:
+            pass
+        return ""
+
