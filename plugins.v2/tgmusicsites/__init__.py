@@ -86,11 +86,13 @@ class TgMusicSites(_PluginBase):
     _client_ready = False  # client 已创建并连接
 
     # 登录状态机
-    _login_state = "idle"  # idle | qr_waiting | qr_scanned | logged_in | error
+    _login_state = "idle"  # idle | qr_waiting | qr_scanned | code_sent | 2fa_required | logged_in | error
     _login_qr_data = ""    # 二维码 token（原始 base64）
     _login_qr_image = ""   # 二维码 PNG data URI（页面展示）
     _login_error = ""
     _login_qr_login = None  # qr_login 对象
+    _login_phone = ""       # 手机号登录：当前手机号
+    _phone_code_hash = ""   # 手机号登录：send_code_request 返回的 phone_code_hash
 
     # 搜索会话去重
     _search_lock = threading.Lock()
@@ -217,11 +219,32 @@ class TgMusicSites(_PluginBase):
                 "description": "生成 Telegram QR 登录二维码（需已配置 api_id/api_hash）",
             },
             {
+                "path": "/login/phone",
+                "endpoint": self.api_login_phone,
+                "methods": ["POST"],
+                "summary": "手机号登录：发送验证码",
+                "description": "提交手机号（含国家码），发送 Telegram 登录验证码",
+            },
+            {
+                "path": "/login/code",
+                "endpoint": self.api_login_code,
+                "methods": ["POST"],
+                "summary": "手机号登录：提交验证码",
+                "description": "提交短信/App 验证码完成登录（如开启两步验证则先返回 2fa_required）",
+            },
+            {
+                "path": "/login/password",
+                "endpoint": self.api_login_password,
+                "methods": ["POST"],
+                "summary": "两步验证：提交密码",
+                "description": "登录开启两步验证时，提交账号密码完成登录",
+            },
+            {
                 "path": "/login/status",
                 "endpoint": self.api_login_status,
                 "methods": ["GET"],
                 "summary": "查询 TG 登录状态",
-                "description": "轮询登录状态：idle/qr_waiting/qr_scanned/logged_in/error",
+                "description": "轮询登录状态：idle/qr_waiting/qr_scanned/code_sent/2fa_required/logged_in/error",
             },
             {
                 "path": "/login/logout",
@@ -376,6 +399,8 @@ class TgMusicSites(_PluginBase):
             "idle": "未登录",
             "qr_waiting": "等待扫码",
             "qr_scanned": "已扫码，请在手机确认",
+            "code_sent": "验证码已发送，请填写验证码",
+            "2fa_required": "需要两步验证密码",
             "logged_in": "已登录",
             "error": f"登录失败: {self._login_error}",
         }.get(login_state, login_state)
@@ -463,6 +488,94 @@ class TgMusicSites(_PluginBase):
                                         ],
                                     },
                                     *qr_section,
+                                    # 手机号登录区块
+                                    {
+                                        "component": "VDivider",
+                                        "props": {"class": "my-2"},
+                                    },
+                                    {
+                                        "component": "div",
+                                        "props": {"class": "text-subtitle-2 font-weight-bold py-1"},
+                                        "text": "手机号登录（备用）",
+                                    },
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "login_phone",
+                                            "label": "手机号（含国家码）",
+                                            "placeholder": "+8613800138000",
+                                            "hint": "扫码不便时可用手机号+验证码登录",
+                                        },
+                                    },
+                                    {
+                                        "component": "VBtn",
+                                        "props": {
+                                            "color": "primary",
+                                            "variant": "outlined",
+                                            "size": "small",
+                                            "prepend-icon": "mdi-message-text",
+                                        },
+                                        "text": "获取验证码",
+                                        "events": {
+                                            "click": {
+                                                "api": "plugin/TgMusicSites/login/phone",
+                                                "method": "post",
+                                                "params": {"phone": "login_phone"},
+                                            }
+                                        },
+                                    },
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "login_code",
+                                            "label": "验证码",
+                                            "placeholder": "12345",
+                                            "hint": "在 Telegram 内查看验证码（部分账号发送到手机短信）",
+                                        },
+                                    },
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "login_password",
+                                            "label": "两步验证密码（如开启）",
+                                            "placeholder": "",
+                                            "hint": "账号开启两步验证时填写",
+                                        },
+                                    },
+                                    {
+                                        "component": "VBtn",
+                                        "props": {
+                                            "color": "success",
+                                            "variant": "tonal",
+                                            "size": "small",
+                                            "prepend-icon": "mdi-login",
+                                        },
+                                        "text": "验证码登录",
+                                        "events": {
+                                            "click": {
+                                                "api": "plugin/TgMusicSites/login/code",
+                                                "method": "post",
+                                                "params": {"code": "login_code"},
+                                            }
+                                        },
+                                    },
+                                    {
+                                        "component": "VBtn",
+                                        "props": {
+                                            "color": "warning",
+                                            "variant": "tonal",
+                                            "size": "small",
+                                            "prepend-icon": "mdi-form-textbox-password",
+                                        },
+                                        "text": "两步验证登录",
+                                        "events": {
+                                            "click": {
+                                                "api": "plugin/TgMusicSites/login/password",
+                                                "method": "post",
+                                                "params": {"password": "login_password"},
+                                            }
+                                        },
+                                    },
                                     {
                                         "component": "VCardActions",
                                         "props": {"class": "pt-0"},
@@ -625,6 +738,110 @@ class TgMusicSites(_PluginBase):
 
     # ==================== 登录 API ====================
 
+    async def api_login_phone(self, request: Request) -> Dict[str, Any]:
+        """手机号登录：提交手机号，发送验证码。"""
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        phone = str(body.get("phone") or "").strip()
+        if not phone:
+            return {"success": False, "message": "请填写手机号（含国家码，如 +8613800138000）"}
+        if self._client_ready:
+            return {"success": True, "message": "已登录，无需重复登录", "state": "logged_in"}
+        try:
+            async def _send():
+                client = TelegramClient(
+                    StringSession(),
+                    self._api_id,
+                    self._api_hash,
+                    proxy=self._build_proxy(),
+                )
+                await client.connect()
+                self._client = client
+                result = await client.send_code_request(phone)
+                self._login_phone = phone
+                self._phone_code_hash = result.phone_code_hash
+                self._login_state = "code_sent"
+            await self._submit(_send(), timeout=40)
+            return {"success": True, "state": "code_sent", "message": f"验证码已发送至 {phone}，请在 Telegram 内查看"}
+        except Exception as e:
+            self._login_state = "error"
+            self._login_error = str(e)
+            logger.error(f"TG音乐站点：发送验证码失败: {e}")
+            return {"success": False, "message": f"发送验证码失败: {e}"}
+
+    async def api_login_code(self, request: Request) -> Dict[str, Any]:
+        """手机号登录：提交验证码。"""
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        code = str(body.get("code") or "").strip()
+        if not code:
+            return {"success": False, "message": "请填写验证码"}
+        if not self._login_phone or not self._client:
+            return {"success": False, "message": "请先获取验证码"}
+        try:
+            async def _sign():
+                await self._client.sign_in(
+                    self._login_phone,
+                    code=code,
+                    phone_code_hash=self._phone_code_hash,
+                )
+            await self._submit(_sign(), timeout=40)
+            me = await self._submit(self._client.get_me(), timeout=30)
+            session_str = StringSession.save(self._client.session)
+            self.save_data("tg_session", session_str)
+            self._client_ready = True
+            self._login_state = "logged_in"
+            self._login_phone = ""
+            self._phone_code_hash = ""
+            logger.info(f"TG音乐站点：手机号登录成功: {me.username or me.first_name}")
+            return {"success": True, "state": "logged_in", "message": "登录成功"}
+        except Exception as e:
+            try:
+                from telethon.errors import SessionPasswordNeededError
+                if isinstance(e, SessionPasswordNeededError):
+                    self._login_state = "2fa_required"
+                    return {"success": False, "state": "2fa_required", "message": "该账号开启了两步验证，请提交密码"}
+            except ImportError:
+                pass
+            self._login_state = "error"
+            self._login_error = str(e)
+            logger.error(f"TG音乐站点：验证码登录失败: {e}")
+            return {"success": False, "message": f"登录失败: {e}"}
+
+    async def api_login_password(self, request: Request) -> Dict[str, Any]:
+        """两步验证：提交密码完成登录。"""
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        password = str(body.get("password") or "").strip()
+        if not password:
+            return {"success": False, "message": "请填写两步验证密码"}
+        if not self._client:
+            return {"success": False, "message": "请先获取验证码"}
+        try:
+            async def _sign():
+                await self._client.sign_in(password=password)
+            await self._submit(_sign(), timeout=40)
+            me = await self._submit(self._client.get_me(), timeout=30)
+            session_str = StringSession.save(self._client.session)
+            self.save_data("tg_session", session_str)
+            self._client_ready = True
+            self._login_state = "logged_in"
+            self._login_phone = ""
+            self._phone_code_hash = ""
+            logger.info(f"TG音乐站点：两步验证登录成功: {me.username or me.first_name}")
+            return {"success": True, "state": "logged_in", "message": "登录成功"}
+        except Exception as e:
+            self._login_state = "error"
+            self._login_error = str(e)
+            logger.error(f"TG音乐站点：两步验证登录失败: {e}")
+            return {"success": False, "message": f"登录失败: {e}"}
+
     async def api_login_qr(self) -> Dict[str, Any]:
         """生成 TG 登录二维码（返回 PNG data URI 供页面展示）。"""
         if not self._api_id or not self._api_hash:
@@ -778,6 +995,8 @@ class TgMusicSites(_PluginBase):
                 "idle": "未登录",
                 "qr_waiting": "等待扫码",
                 "qr_scanned": "已扫码，请在手机确认",
+                "code_sent": "验证码已发送，请填写验证码",
+                "2fa_required": "需要两步验证密码",
                 "logged_in": "已登录",
                 "error": f"登录失败: {self._login_error}",
             }.get(self._login_state, self._login_state),
