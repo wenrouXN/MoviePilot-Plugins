@@ -74,7 +74,7 @@ def test_non_music_passthrough():
 def test_music_search_returns_torrents():
     """音乐搜索应返回 TorrentInfo 列表。"""
     plugin = _initialized_plugin(enabled=True)
-    fake_torrent = {"title": "七里香", "description": "", "button_data": b"\x01\x02", "msg_id": 100}
+    fake_torrent = {"index": 1, "title": "七里香", "description": "", "button_data": b"\x01\x02", "msg_id": 100, "bot_username": "music_v1bot"}
     # _tg_search 的真实实现会调 _results_to_torrents 转换；这里 patch 掉网络部分，
     # 让 _tg_search 直接返回转换后的 TorrentInfo（与真实流程一致）
     torrents = plugin._results_to_torrents([fake_torrent])
@@ -90,6 +90,9 @@ def test_music_search_returns_torrents():
         assert torrent.category == MediaType.MUSIC.value
         assert torrent.enclosure.startswith("magnet:?")
         assert "tgmusic-" in torrent.enclosure
+        # 站点名=bot 名；描述=单条结果（非整段过程文本）
+        assert torrent.site_name == "music_v1bot"
+        assert torrent.description == "1. 七里香"
 
 
 def test_results_to_torrents_enclosure_unique():

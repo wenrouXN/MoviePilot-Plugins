@@ -1583,11 +1583,15 @@ class TgMusicSites(_PluginBase):
             # 本插件 tg_download 拦截识别 tgmusic-{uid} 标记，反查缓存触发真实 TG 下载。
             torrent = TorrentInfo()
             torrent.site = self._TG_SITE_ID
-            torrent.site_name = self._TG_SITE_NAME
+            # 站点名=bot 名：多个 bot 即多个站点（无 bot 时退回插件名）
+            bot_name = (r.get("bot_username") or "").strip()
+            torrent.site_name = bot_name or self._TG_SITE_NAME
             torrent.site_order = 0
             torrent.site_proxy = True
             torrent.title = r.get("title") or ""
-            torrent.description = r.get("description") or ""
+            # 描述=单条结果（标题+序号），不再塞整段搜索过程文本
+            idx = r.get("index") or 0
+            torrent.description = f"{idx}. {torrent.title}" if idx and torrent.title else (torrent.title or "")
             torrent.enclosure = (
                 f"magnet:?xt=urn:btih:{uid}{'0' * 24}"
                 f"&dn={self._TG_MAGNET_MARKER}{uid}"
