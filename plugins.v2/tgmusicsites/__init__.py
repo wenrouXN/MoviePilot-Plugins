@@ -296,6 +296,13 @@ class TgMusicSites(_PluginBase):
                 "summary": "下载历史记录",
                 "description": "获取插件下载历史（含真实大小/时长/专辑等）",
             },
+            {
+                "path": "/logs",
+                "endpoint": self.api_logs,
+                "methods": ["GET"],
+                "summary": "插件日志",
+                "description": "读取插件日志文件尾部内容（最近 30 行）",
+            },
         ]
 
     def get_module(self) -> Dict[str, Any]:
@@ -486,6 +493,14 @@ class TgMusicSites(_PluginBase):
         history = self.get_data("tg_download_history") or []
         if not isinstance(history, list):
             history = []
+        # 插件日志（服务端读取，打开页面即显示最近 30 行）
+        log_lines = []
+        try:
+            log_path = Path(settings.CONFIG_PATH) / "logs" / "plugins" / "tgmusicsites.log"
+            if log_path.exists():
+                log_lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()[-30:]
+        except Exception:
+            log_lines = []
         history_rows = []
         for h in history:
             size_txt = h.get("size_text") or (
@@ -874,6 +889,47 @@ class TgMusicSites(_PluginBase):
                                 "props": {"class": "text-body-2 text-grey"},
                                 "text": "暂无下载记录",
                             }
+                        ],
+                    },
+                ],
+            },
+            {
+                "component": "VCard",
+                "props": {"variant": "tonal", "class": "mt-2"},
+                "content": [
+                    {
+                        "component": "VCardTitle",
+                        "props": {"class": "text-subtitle-1 font-weight-bold"},
+                        "text": "📋 插件日志",
+                    },
+                    {
+                        "component": "VCardText",
+                        "props": {"class": "pt-0"},
+                        "content": [
+                            {
+                                "component": "VBtn",
+                                "props": {
+                                    "color": "primary",
+                                    "variant": "tonal",
+                                    "prepend-icon": "mdi-refresh",
+                                    "size": "small",
+                                },
+                                "text": "刷新日志",
+                                "events": {
+                                    "click": {
+                                        "api": "plugin/TgMusicSites/logs",
+                                        "method": "get",
+                                    }
+                                },
+                            },
+                            {
+                                "component": "div",
+                                "props": {
+                                    "class": "text-body-2 mt-2",
+                                    "style": "max-height: 300px; overflow-y: auto; font-family: monospace; white-space: pre-wrap; word-break: break-all; font-size: 12px;",
+                                },
+                                "text": "\n".join(log_lines) if log_lines else "暂无日志",
+                            },
                         ],
                     },
                 ],
@@ -1339,6 +1395,18 @@ class TgMusicSites(_PluginBase):
             return {"success": True, "count": len(history), "data": history}
         except Exception as e:
             return {"success": False, "message": f"获取下载历史失败: {str(e)}", "data": []}
+
+    async def api_logs(self) -> Dict[str, Any]:
+        """读取插件日志文件尾部内容（最近 30 行）。"""
+        try:
+            log_path = Path(settings.CONFIG_PATH) / "logs" / "plugins" / "tgmusicsites.log"
+            if not log_path.exists():
+                return {"success": True, "data": [], "message": "日志文件不存在（插件尚未产生日志）"}
+            lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            tail = lines[-30:]
+            return {"success": True, "count": len(tail), "data": tail}
+        except Exception as e:
+            return {"success": False, "message": f"读取日志失败: {str(e)}", "data": []}
 
     @staticmethod
     def _connect_test(client: Any) -> bool:
