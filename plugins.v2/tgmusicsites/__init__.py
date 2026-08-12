@@ -653,407 +653,473 @@ class TgMusicSites(_PluginBase):
             })
         return [
             {
-                "component": "VRow",
-                "props": {"class": "mb-2"},
+                "component": "VExpansionPanels",
+                "props": {
+                    "modelValue": 0,
+                    "multiple": True,
+                },
                 "content": [
                     {
-                        "component": "VCol",
-                        "props": {"cols": 12, "md": 6},
+                        "component": "VExpansionPanel",
                         "content": [
                             {
-                                "component": "VCard",
-                                "props": {"variant": "tonal", "color": "primary"},
+                                "component": "VExpansionPanelTitle",
+                                "props": {"class": "text-subtitle-1 font-weight-bold"},
                                 "content": [
-                                    {
-                                        "component": "VCardTitle",
-                                        "props": {"class": "text-subtitle-1 font-weight-bold"},
-                                        "text": "TG 登录状态",
-                                    },
-                                    {
-                                        "component": "VCardText",
-                                        "props": {"class": "py-2"},
-                                        "content": [
-                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"登录状态：{conn_state}"},
-                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"下载目录：{self._download_dir}"},
-                                            {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"Bot 数量：{len(bots)} 个"},
-                                        ],
-                                    },
-                                    *qr_section,
-                                    # 手机号登录区块
-                                    {
-                                        "component": "VDivider",
-                                        "props": {"class": "my-2"},
-                                    },
-                                    {
-                                        "component": "div",
-                                        "props": {"class": "text-subtitle-2 font-weight-bold py-1"},
-                                        "text": "手机号登录（备用）",
-                                    },
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "login_phone",
-                                            "label": "手机号（含国家码）",
-                                            "placeholder": "+8613800138000",
-                                            "hint": "扫码不便时可用手机号+验证码登录",
-                                        },
-                                    },
-                                    {
-                                        "component": "VBtn",
-                                        "props": {
-                                            "color": "primary",
-                                            "variant": "outlined",
-                                            "size": "small",
-                                            "prepend-icon": "mdi-message-text",
-                                        },
-                                        "text": "获取验证码",
-                                        "events": {
-                                            "click": {
-                                                "api": "plugin/TgMusicSites/login/phone",
-                                                "method": "post",
-                                                "params": {"phone": "login_phone"},
-                                            }
-                                        },
-                                    },
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "login_code",
-                                            "label": "验证码",
-                                            "placeholder": "12345",
-                                            "hint": "在 Telegram 内查看验证码（部分账号发送到手机短信）",
-                                        },
-                                    },
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "login_password",
-                                            "label": "两步验证密码（如开启）",
-                                            "placeholder": "",
-                                            "hint": "账号开启两步验证时填写",
-                                        },
-                                    },
-                                    {
-                                        "component": "VBtn",
-                                        "props": {
-                                            "color": "success",
-                                            "variant": "tonal",
-                                            "size": "small",
-                                            "prepend-icon": "mdi-login",
-                                        },
-                                        "text": "验证码登录",
-                                        "events": {
-                                            "click": {
-                                                "api": "plugin/TgMusicSites/login/code",
-                                                "method": "post",
-                                                "params": {"code": "login_code"},
-                                            }
-                                        },
-                                    },
-                                    {
-                                        "component": "VBtn",
-                                        "props": {
-                                            "color": "warning",
-                                            "variant": "tonal",
-                                            "size": "small",
-                                            "prepend-icon": "mdi-form-textbox-password",
-                                        },
-                                        "text": "两步验证登录",
-                                        "events": {
-                                            "click": {
-                                                "api": "plugin/TgMusicSites/login/password",
-                                                "method": "post",
-                                                "params": {"password": "login_password"},
-                                            }
-                                        },
-                                    },
-                                    {
-                                        "component": "VCardActions",
-                                        "props": {"class": "pt-0"},
-                                        "content": [
-                                            {
-                                                "component": "VBtn",
-                                                "props": {
-                                                    "color": "primary",
-                                                    "variant": "tonal",
-                                                    "prepend-icon": "mdi-qrcode",
+                                    {"component": "span", "text": "📊 状态"},
+                                    {"component": "span", "props": {"class": "ml-2 text-caption text-grey"}, "text": "登录状态、连接测试与试搜索"},
+                                ],
+                            },
+                            {
+                                "component": "VExpansionPanelText",
+                                "content": [
+                                {
+                                    "component": "VRow",
+                                    "props": {"class": "mb-2"},
+                                    "content": [
+                                        {
+                                            "component": "VCol",
+                                            "props": {"cols": 12, "md": 6},
+                                            "content": [
+                                                {
+                                                    "component": "VCard",
+                                                    "props": {"variant": "tonal", "color": "primary"},
+                                                    "content": [
+                                                        {
+                                                            "component": "VCardTitle",
+                                                            "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                                            "text": "TG 登录状态",
+                                                        },
+                                                        {
+                                                            "component": "VCardText",
+                                                            "props": {"class": "py-2"},
+                                                            "content": [
+                                                                {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"登录状态：{conn_state}"},
+                                                                {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"下载目录：{self._download_dir}"},
+                                                                {"component": "div", "props": {"class": "text-body-2 py-1"}, "text": f"Bot 数量：{len(bots)} 个"},
+                                                            ],
+                                                        },
+                                                        *qr_section,
+                                                        # 手机号登录区块
+                                                        {
+                                                            "component": "VDivider",
+                                                            "props": {"class": "my-2"},
+                                                        },
+                                                        {
+                                                            "component": "div",
+                                                            "props": {"class": "text-subtitle-2 font-weight-bold py-1"},
+                                                            "text": "手机号登录（备用）",
+                                                        },
+                                                        {
+                                                            "component": "VTextField",
+                                                            "props": {
+                                                                "model": "login_phone",
+                                                                "label": "手机号（含国家码）",
+                                                                "placeholder": "+8613800138000",
+                                                                "hint": "扫码不便时可用手机号+验证码登录",
+                                                            },
+                                                        },
+                                                        {
+                                                            "component": "VBtn",
+                                                            "props": {
+                                                                "color": "primary",
+                                                                "variant": "outlined",
+                                                                "size": "small",
+                                                                "prepend-icon": "mdi-message-text",
+                                                            },
+                                                            "text": "获取验证码",
+                                                            "events": {
+                                                                "click": {
+                                                                    "api": "plugin/TgMusicSites/login/phone",
+                                                                    "method": "post",
+                                                                    "params": {"phone": "login_phone"},
+                                                                }
+                                                            },
+                                                        },
+                                                        {
+                                                            "component": "VTextField",
+                                                            "props": {
+                                                                "model": "login_code",
+                                                                "label": "验证码",
+                                                                "placeholder": "12345",
+                                                                "hint": "在 Telegram 内查看验证码（部分账号发送到手机短信）",
+                                                            },
+                                                        },
+                                                        {
+                                                            "component": "VTextField",
+                                                            "props": {
+                                                                "model": "login_password",
+                                                                "label": "两步验证密码（如开启）",
+                                                                "placeholder": "",
+                                                                "hint": "账号开启两步验证时填写",
+                                                            },
+                                                        },
+                                                        {
+                                                            "component": "VBtn",
+                                                            "props": {
+                                                                "color": "success",
+                                                                "variant": "tonal",
+                                                                "size": "small",
+                                                                "prepend-icon": "mdi-login",
+                                                            },
+                                                            "text": "验证码登录",
+                                                            "events": {
+                                                                "click": {
+                                                                    "api": "plugin/TgMusicSites/login/code",
+                                                                    "method": "post",
+                                                                    "params": {"code": "login_code"},
+                                                                }
+                                                            },
+                                                        },
+                                                        {
+                                                            "component": "VBtn",
+                                                            "props": {
+                                                                "color": "warning",
+                                                                "variant": "tonal",
+                                                                "size": "small",
+                                                                "prepend-icon": "mdi-form-textbox-password",
+                                                            },
+                                                            "text": "两步验证登录",
+                                                            "events": {
+                                                                "click": {
+                                                                    "api": "plugin/TgMusicSites/login/password",
+                                                                    "method": "post",
+                                                                    "params": {"password": "login_password"},
+                                                                }
+                                                            },
+                                                        },
+                                                        {
+                                                            "component": "VCardActions",
+                                                            "props": {"class": "pt-0"},
+                                                            "content": [
+                                                                {
+                                                                    "component": "VBtn",
+                                                                    "props": {
+                                                                        "color": "primary",
+                                                                        "variant": "tonal",
+                                                                        "prepend-icon": "mdi-qrcode",
+                                                                    },
+                                                                    "text": "生成登录二维码",
+                                                                    "events": {
+                                                                        "click": {
+                                                                            "api": "plugin/TgMusicSites/login/qr",
+                                                                            "method": "get",
+                                                                        }
+                                                                    },
+                                                                },
+                                                                {
+                                                                    "component": "VBtn",
+                                                                    "props": {
+                                                                        "color": "secondary",
+                                                                        "variant": "tonal",
+                                                                        "prepend-icon": "mdi-refresh",
+                                                                    },
+                                                                    "text": "刷新状态",
+                                                                    "events": {
+                                                                        "click": {
+                                                                            "api": "plugin/TgMusicSites/login/status",
+                                                                            "method": "get",
+                                                                        }
+                                                                    },
+                                                                },
+                                                                {
+                                                                    "component": "VBtn",
+                                                                    "props": {
+                                                                        "color": "error",
+                                                                        "variant": "tonal",
+                                                                        "prepend-icon": "mdi-logout",
+                                                                    },
+                                                                    "text": "注销登录",
+                                                                    "events": {
+                                                                        "click": {
+                                                                            "api": "plugin/TgMusicSites/login/logout",
+                                                                            "method": "post",
+                                                                        }
+                                                                    },
+                                                                },
+                                                            ],
+                                                        },
+                                                    ],
                                                 },
-                                                "text": "生成登录二维码",
-                                                "events": {
-                                                    "click": {
-                                                        "api": "plugin/TgMusicSites/login/qr",
-                                                        "method": "get",
-                                                    }
+                                            ],
+                                        },
+                                        {
+                                            "component": "VCol",
+                                            "props": {"cols": 12, "md": 6},
+                                            "content": [
+                                                {
+                                                    "component": "VCard",
+                                                    "props": {"variant": "tonal", "color": "secondary"},
+                                                    "content": [
+                                                        {
+                                                            "component": "VCardTitle",
+                                                            "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                                            "text": "试搜索",
+                                                        },
+                                                        {
+                                                            "component": "VCardText",
+                                                            "props": {"class": "py-2"},
+                                                            "content": [
+                                                                {
+                                                                    "component": "VTextField",
+                                                                    "props": {
+                                                                        "model": "try_keyword",
+                                                                        "label": "搜索关键词",
+                                                                        "hint": "输入歌曲名，选择 Bot 后搜索"
+                                                                    }
+                                                                },
+                                                                {
+                                                                    "component": "VSelect",
+                                                                    "props": {
+                                                                        "model": "try_bot",
+                                                                        "label": "选择 Bot",
+                                                                        "items": [
+                                                                            {"title": v.get("name", k), "value": v.get("bot_username", "")}
+                                                                            for k, v in bots.items()
+                                                                        ] or [{"title": "请先添加 Bot", "value": ""}]
+                                                                    }
+                                                                },
+                                                                {
+                                                                    "component": "VBtn",
+                                                                    "props": {
+                                                                        "color": "success",
+                                                                        "variant": "tonal",
+                                                                        "prepend-icon": "mdi-magnify",
+                                                                    },
+                                                                    "text": "试搜索",
+                                                                    "events": {
+                                                                        "click": {
+                                                                            "api": "plugin/TgMusicSites/search",
+                                                                            "method": "post",
+                                                                            "params": {"keyword": "try_keyword", "bot_username": "try_bot"},
+                                                                        }
+                                                                    },
+                                                                },
+                                                            ],
+                                                        },
+                                                    ],
                                                 },
-                                            },
-                                            {
-                                                "component": "VBtn",
-                                                "props": {
-                                                    "color": "secondary",
-                                                    "variant": "tonal",
-                                                    "prepend-icon": "mdi-refresh",
-                                                },
-                                                "text": "刷新状态",
-                                                "events": {
-                                                    "click": {
-                                                        "api": "plugin/TgMusicSites/login/status",
-                                                        "method": "get",
-                                                    }
-                                                },
-                                            },
-                                            {
-                                                "component": "VBtn",
-                                                "props": {
-                                                    "color": "error",
-                                                    "variant": "tonal",
-                                                    "prepend-icon": "mdi-logout",
-                                                },
-                                                "text": "注销登录",
-                                                "events": {
-                                                    "click": {
-                                                        "api": "plugin/TgMusicSites/login/logout",
-                                                        "method": "post",
-                                                    }
-                                                },
-                                            },
-                                        ],
-                                    },
+                                            ],
+                                        },
+                                    ],
+                                },
+                        
                                 ],
                             },
                         ],
                     },
                     {
-                        "component": "VCol",
-                        "props": {"cols": 12, "md": 6},
+                        "component": "VExpansionPanel",
                         "content": [
                             {
-                                "component": "VCard",
-                                "props": {"variant": "tonal", "color": "secondary"},
+                                "component": "VExpansionPanelTitle",
+                                "props": {"class": "text-subtitle-1 font-weight-bold"},
                                 "content": [
-                                    {
-                                        "component": "VCardTitle",
-                                        "props": {"class": "text-subtitle-1 font-weight-bold"},
-                                        "text": "试搜索",
-                                    },
-                                    {
-                                        "component": "VCardText",
-                                        "props": {"class": "py-2"},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "try_keyword",
-                                                    "label": "搜索关键词",
-                                                    "hint": "输入歌曲名，选择 Bot 后搜索"
-                                                }
-                                            },
-                                            {
-                                                "component": "VSelect",
-                                                "props": {
-                                                    "model": "try_bot",
-                                                    "label": "选择 Bot",
-                                                    "items": [
-                                                        {"title": v.get("name", k), "value": v.get("bot_username", "")}
-                                                        for k, v in bots.items()
-                                                    ] or [{"title": "请先添加 Bot", "value": ""}]
-                                                }
-                                            },
-                                            {
-                                                "component": "VBtn",
-                                                "props": {
-                                                    "color": "success",
-                                                    "variant": "tonal",
-                                                    "prepend-icon": "mdi-magnify",
+                                    {"component": "span", "text": "🔌 站点"},
+                                    {"component": "span", "props": {"class": "ml-2 text-caption text-grey"}, "text": "添加 Bot 与站点列表"},
+                                ],
+                            },
+                            {
+                                "component": "VExpansionPanelText",
+                                "content": [
+                                {
+                                    "component": "VCard",
+                                    "props": {"variant": "outlined", "class": "mt-2"},
+                                    "content": [
+                                        {
+                                            "component": "VCardTitle",
+                                            "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                            "text": "添加 Bot 站点",
+                                        },
+                                        {
+                                            "component": "VCardText",
+                                            "props": {"class": "py-2"},
+                                            "content": [
+                                                {
+                                                    "component": "div",
+                                                    "props": {"class": "text-body-2 text-grey pb-2"},
+                                                    "text": "手动添加 Telegram 音乐 Bot 作为搜索站点（支持多个 Bot）",
                                                 },
-                                                "text": "试搜索",
-                                                "events": {
-                                                    "click": {
-                                                        "api": "plugin/TgMusicSites/search",
-                                                        "method": "post",
-                                                        "params": {"keyword": "try_keyword", "bot_username": "try_bot"},
-                                                    }
+                                                {
+                                                    "component": "VTextField",
+                                                    "props": {
+                                                        "model": "new_bot_username",
+                                                        "label": "Bot 用户名",
+                                                        "placeholder": "music_v1bot",
+                                                        "hint": "不带 @ 前缀",
+                                                    },
                                                 },
-                                            },
-                                        ],
-                                    },
+                                                {
+                                                    "component": "VTextField",
+                                                    "props": {
+                                                        "model": "new_bot_name",
+                                                        "label": "显示名称",
+                                                        "placeholder": "音乐机器人",
+                                                        "hint": "留空默认 Bot 用户名",
+                                                    },
+                                                },
+                                                {
+                                                    "component": "VTextField",
+                                                    "props": {
+                                                        "model": "new_bot_command",
+                                                        "label": "搜索命令",
+                                                        "placeholder": "/search {keyword}",
+                                                        "hint": "{keyword} 会被替换为搜索词",
+                                                    },
+                                                },
+                                                {
+                                                    "component": "VBtn",
+                                                    "props": {
+                                                        "color": "primary",
+                                                        "variant": "tonal",
+                                                        "prepend-icon": "mdi-plus",
+                                                    },
+                                                    "text": "添加 Bot",
+                                                    "events": {
+                                                        "click": {
+                                                            "api": "plugin/TgMusicSites/bots",
+                                                            "method": "post",
+                                                            "params": {
+                                                                "bot_username": "new_bot_username",
+                                                                "name": "new_bot_name",
+                                                                "search_command": "new_bot_command",
+                                                            },
+                                                        }
+                                                    },
+                                                },
+                                            ],
+                                        },
+                                    ],
+                                },
+                                {
+                                    "component": "VCard",
+                                    "props": {"variant": "outlined", "class": "mt-2"},
+                                    "content": [
+                                        {
+                                            "component": "VCardTitle",
+                                            "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                            "text": "Bot 列表",
+                                        },
+                                        {
+                                            "component": "VCardText",
+                                            "props": {"class": "py-2"},
+                                            "content": bot_rows or [
+                                                {
+                                                    "component": "div",
+                                                    "props": {"class": "text-body-2 text-grey"},
+                                                    "text": "暂无 Bot，请在上方添加",
+                                                }
+                                            ],
+                                        },
+                                        {
+                                            "component": "VCardActions",
+                                            "props": {"class": "pt-0"},
+                                            "content": [
+                                                {
+                                                    "component": "VBtn",
+                                                    "props": {
+                                                        "color": "error",
+                                                        "variant": "tonal",
+                                                        "prepend-icon": "mdi-delete-sweep",
+                                                    },
+                                                    "text": "清空插件数据（卸载前）",
+                                                    "events": {
+                                                        "click": {
+                                                            "api": "plugin/TgMusicSites/cleanup",
+                                                            "method": "post",
+                                                        }
+                                                    },
+                                                },
+                                            ],
+                                        },
+                                    ],
+                                },
+                        
                                 ],
                             },
                         ],
                     },
-                ],
-            },
-            {
-                "component": "VCard",
-                "props": {"variant": "outlined", "class": "mt-2"},
-                "content": [
                     {
-                        "component": "VCardTitle",
-                        "props": {"class": "text-subtitle-1 font-weight-bold"},
-                        "text": "添加 Bot 站点",
-                    },
-                    {
-                        "component": "VCardText",
-                        "props": {"class": "py-2"},
+                        "component": "VExpansionPanel",
                         "content": [
                             {
-                                "component": "div",
-                                "props": {"class": "text-body-2 text-grey pb-2"},
-                                "text": "手动添加 Telegram 音乐 Bot 作为搜索站点（支持多个 Bot）",
+                                "component": "VExpansionPanelTitle",
+                                "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                "content": [
+                                    {"component": "span", "text": "📜 记录"},
+                                    {"component": "span", "props": {"class": "ml-2 text-caption text-grey"}, "text": "下载历史与插件日志"},
+                                ],
                             },
                             {
-                                "component": "VTextField",
-                                "props": {
-                                    "model": "new_bot_username",
-                                    "label": "Bot 用户名",
-                                    "placeholder": "music_v1bot",
-                                    "hint": "不带 @ 前缀",
-                                },
-                            },
-                            {
-                                "component": "VTextField",
-                                "props": {
-                                    "model": "new_bot_name",
-                                    "label": "显示名称",
-                                    "placeholder": "音乐机器人",
-                                    "hint": "留空默认 Bot 用户名",
-                                },
-                            },
-                            {
-                                "component": "VTextField",
-                                "props": {
-                                    "model": "new_bot_command",
-                                    "label": "搜索命令",
-                                    "placeholder": "/search {keyword}",
-                                    "hint": "{keyword} 会被替换为搜索词",
-                                },
-                            },
-                            {
-                                "component": "VBtn",
-                                "props": {
-                                    "color": "primary",
-                                    "variant": "tonal",
-                                    "prepend-icon": "mdi-plus",
-                                },
-                                "text": "添加 Bot",
-                                "events": {
-                                    "click": {
-                                        "api": "plugin/TgMusicSites/bots",
-                                        "method": "post",
-                                        "params": {
-                                            "bot_username": "new_bot_username",
-                                            "name": "new_bot_name",
-                                            "search_command": "new_bot_command",
+                                "component": "VExpansionPanelText",
+                                "content": [
+                                {
+                                    "component": "VCard",
+                                    "props": {"variant": "tonal", "class": "mt-2"},
+                                    "content": [
+                                        {
+                                            "component": "VCardTitle",
+                                            "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                            "text": "📥 下载历史",
                                         },
-                                    }
+                                        {
+                                            "component": "VCardText",
+                                            "props": {"class": "pt-0"},
+                                            "content": history_rows
+                                            if history_rows
+                                            else [
+                                                {
+                                                    "component": "div",
+                                                    "props": {"class": "text-body-2 text-grey"},
+                                                    "text": "暂无下载记录",
+                                                }
+                                            ],
+                                        },
+                                    ],
                                 },
-                            },
-                        ],
-                    },
-                ],
-            },
-            {
-                "component": "VCard",
-                "props": {"variant": "outlined", "class": "mt-2"},
-                "content": [
-                    {
-                        "component": "VCardTitle",
-                        "props": {"class": "text-subtitle-1 font-weight-bold"},
-                        "text": "Bot 列表",
-                    },
-                    {
-                        "component": "VCardText",
-                        "props": {"class": "py-2"},
-                        "content": bot_rows or [
-                            {
-                                "component": "div",
-                                "props": {"class": "text-body-2 text-grey"},
-                                "text": "暂无 Bot，请在上方添加",
-                            }
-                        ],
-                    },
-                    {
-                        "component": "VCardActions",
-                        "props": {"class": "pt-0"},
-                        "content": [
-                            {
-                                "component": "VBtn",
-                                "props": {
-                                    "color": "error",
-                                    "variant": "tonal",
-                                    "prepend-icon": "mdi-delete-sweep",
+                                {
+                                    "component": "VCard",
+                                    "props": {"variant": "tonal", "class": "mt-2"},
+                                    "content": [
+                                        {
+                                            "component": "VCardTitle",
+                                            "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                            "text": "📋 插件日志",
+                                        },
+                                        {
+                                            "component": "VCardText",
+                                            "props": {"class": "pt-0"},
+                                            "content": [
+                                                {
+                                                    "component": "VBtn",
+                                                    "props": {
+                                                        "color": "primary",
+                                                        "variant": "tonal",
+                                                        "prepend-icon": "mdi-refresh",
+                                                        "size": "small",
+                                                    },
+                                                    "text": "刷新日志",
+                                                    "events": {
+                                                        "click": {
+                                                            "api": "plugin/TgMusicSites/logs",
+                                                            "method": "get",
+                                                        }
+                                                    },
+                                                },
+                                                {
+                                                    "component": "div",
+                                                    "props": {
+                                                        "class": "text-body-2 mt-2",
+                                                        "style": "max-height: 300px; overflow-y: auto; font-family: monospace; white-space: pre-wrap; word-break: break-all; font-size: 12px;",
+                                                    },
+                                                    "text": "\n".join(log_lines) if log_lines else "暂无日志",
+                                                },
+                                            ],
+                                        },
+                                    ],
                                 },
-                                "text": "清空插件数据（卸载前）",
-                                "events": {
-                                    "click": {
-                                        "api": "plugin/TgMusicSites/cleanup",
-                                        "method": "post",
-                                    }
-                                },
-                            },
-                        ],
-                    },
-                ],
-            },
-            {
-                "component": "VCard",
-                "props": {"variant": "tonal", "class": "mt-2"},
-                "content": [
-                    {
-                        "component": "VCardTitle",
-                        "props": {"class": "text-subtitle-1 font-weight-bold"},
-                        "text": "📥 下载历史",
-                    },
-                    {
-                        "component": "VCardText",
-                        "props": {"class": "pt-0"},
-                        "content": history_rows
-                        if history_rows
-                        else [
-                            {
-                                "component": "div",
-                                "props": {"class": "text-body-2 text-grey"},
-                                "text": "暂无下载记录",
-                            }
-                        ],
-                    },
-                ],
-            },
-            {
-                "component": "VCard",
-                "props": {"variant": "tonal", "class": "mt-2"},
-                "content": [
-                    {
-                        "component": "VCardTitle",
-                        "props": {"class": "text-subtitle-1 font-weight-bold"},
-                        "text": "📋 插件日志",
-                    },
-                    {
-                        "component": "VCardText",
-                        "props": {"class": "pt-0"},
-                        "content": [
-                            {
-                                "component": "VBtn",
-                                "props": {
-                                    "color": "primary",
-                                    "variant": "tonal",
-                                    "prepend-icon": "mdi-refresh",
-                                    "size": "small",
-                                },
-                                "text": "刷新日志",
-                                "events": {
-                                    "click": {
-                                        "api": "plugin/TgMusicSites/logs",
-                                        "method": "get",
-                                    }
-                                },
-                            },
-                            {
-                                "component": "div",
-                                "props": {
-                                    "class": "text-body-2 mt-2",
-                                    "style": "max-height: 300px; overflow-y: auto; font-family: monospace; white-space: pre-wrap; word-break: break-all; font-size: 12px;",
-                                },
-                                "text": "\n".join(log_lines) if log_lines else "暂无日志",
+                        
+                                ],
                             },
                         ],
                     },
