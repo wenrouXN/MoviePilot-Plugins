@@ -322,80 +322,205 @@ class TgMusicSites(_PluginBase):
                 "component": "VForm",
                 "content": [
                     {
-                        "component": "VSwitch",
-                        "props": {"model": "enabled", "label": "启用插件"}
+                        "component": "VCard",
+                        "props": {"variant": "tonal", "class": "mb-2"},
+                        "content": [
+                            {
+                                "component": "VCardTitle",
+                                "props": {"class": "text-subtitle-2 font-weight-bold"},
+                                "text": "⚙️ 基础设置",
+                            },
+                            {
+                                "component": "VCardText",
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "enabled",
+                                            "label": "启用插件",
+                                            "hint": "关闭后不参与搜索链",
+                                            "persistent-hint": True,
+                                        },
+                                    },
+                                    {
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextField",
+                                                        "props": {
+                                                            "model": "api_id",
+                                                            "label": "Telegram API ID",
+                                                            "hint": "my.telegram.org 获取，仅首次登录需要",
+                                                            "persistent-hint": True,
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextField",
+                                                        "props": {
+                                                            "model": "api_hash",
+                                                            "label": "Telegram API Hash",
+                                                            "hint": "仅首次登录需要",
+                                                            "persistent-hint": True,
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                ],
+                            },
+                        ],
                     },
                     {
-                        "component": "VTextField",
-                        "props": {
-                            "model": "api_id",
-                            "label": "Telegram API ID",
-                            "hint": "my.telegram.org 获取（登录用，登录成功后可不填）"
-                        }
+                        "component": "VCard",
+                        "props": {"variant": "tonal", "class": "mb-2"},
+                        "content": [
+                            {
+                                "component": "VCardTitle",
+                                "props": {"class": "text-subtitle-2 font-weight-bold"},
+                                "text": "📥 下载设置",
+                            },
+                            {
+                                "component": "VCardText",
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "download_dir",
+                                            "label": "音乐下载目录",
+                                            "hint": "默认 /qbs/torrents/music/",
+                                            "persistent-hint": True,
+                                        },
+                                    },
+                                    {
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextField",
+                                                        "props": {
+                                                            "model": "search_timeout",
+                                                            "label": "搜索超时（秒）",
+                                                            "hint": "默认 30",
+                                                            "persistent-hint": True,
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextField",
+                                                        "props": {
+                                                            "model": "download_timeout",
+                                                            "label": "下载超时（秒）",
+                                                            "hint": "默认 120",
+                                                            "persistent-hint": True,
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "button_index",
+                                            "label": "默认按钮序号",
+                                            "hint": "搜索结果默认点击第几个按钮，默认 1",
+                                            "persistent-hint": True,
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
                     },
                     {
-                        "component": "VTextField",
-                        "props": {
-                            "model": "api_hash",
-                            "label": "Telegram API Hash",
-                            "hint": "my.telegram.org 获取（登录用，登录成功后可不填）"
-                        }
-                    },
-                    {
-                        "component": "VTextField",
-                        "props": {
-                            "model": "download_dir",
-                            "label": "音乐下载目录",
-                            "hint": "默认 /qbs/torrents/music/"
-                        }
-                    },
-                    {
-                        "component": "VTextField",
-                        "props": {"model": "search_timeout", "label": "搜索超时(秒)", "hint": "默认 30"}
-                    },
-                    {
-                        "component": "VTextField",
-                        "props": {"model": "download_timeout", "label": "下载超时(秒)", "hint": "默认 120"}
-                    },
-                    {
-                        "component": "VTextField",
-                        "props": {"model": "button_index", "label": "默认按钮序号", "hint": "默认 1"}
-                    },
-                    {
-                        "component": "VTextField",
-                        "props": {
-                            "model": "proxy_host",
-                            "label": "代理主机",
-                            "hint": "默认 127.0.0.1（本机代理）；生产环境如代理在其它机器填其 IP"
-                        }
-                    },
-                    {
-                        "component": "VTextField",
-                        "props": {
-                            "model": "proxy_port",
-                            "label": "代理端口",
-                            "hint": "默认 7891"
-                        }
-                    },
-                    {
-                        "component": "VSelect",
-                        "props": {
-                            "model": "proxy_type",
-                            "label": "代理类型",
-                            "items": ["socks5", "http", "socks4"],
-                            "hint": "默认 socks5"
-                        }
+                        "component": "VCard",
+                        "props": {"variant": "tonal", "class": "mb-2"},
+                        "content": [
+                            {
+                                "component": "VCardTitle",
+                                "props": {"class": "text-subtitle-2 font-weight-bold"},
+                                "text": "🌐 网络代理",
+                            },
+                            {
+                                "component": "VCardText",
+                                "content": [
+                                    {
+                                        "component": "VRow",
+                                        "content": [
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextField",
+                                                        "props": {
+                                                            "model": "proxy_host",
+                                                            "label": "代理主机",
+                                                            "hint": "默认 127.0.0.1",
+                                                            "persistent-hint": True,
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 6},
+                                                "content": [
+                                                    {
+                                                        "component": "VTextField",
+                                                        "props": {
+                                                            "model": "proxy_port",
+                                                            "label": "代理端口",
+                                                            "hint": "默认 7891",
+                                                            "persistent-hint": True,
+                                                        },
+                                                    }
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                    {
+                                        "component": "VSelect",
+                                        "props": {
+                                            "model": "proxy_type",
+                                            "label": "代理类型",
+                                            "items": ["socks5", "http", "socks4"],
+                                            "hint": "默认 socks5",
+                                            "persistent-hint": True,
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
                     },
                     {
                         "component": "VAlert",
                         "props": {
                             "type": "info",
+                            "variant": "tonal",
                             "dense": True,
-                            "class": "mt-2",
-                            "text": "登录方式：在插件详情页点击『生成登录二维码』，用手机 Telegram 扫码即可。api_id/api_hash 仅首次登录需要，登录成功后 session 自动持久化，重装/升级不丢失。"
-                        }
-                    }
-                ]
+                            "text": "💡 登录方式：在详情页点击『生成登录二维码』扫码即可；api_id/api_hash 仅首次登录需要，session 自动持久化，重装/升级不丢失。",
+                        },
+                    },
+                ],
             }
         ], {
             "enabled": False,
