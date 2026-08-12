@@ -45,6 +45,7 @@ try:
         MessageMediaPhoto,
         UpdateNewMessage,
     )
+    from telethon.tl.functions.messages import GetBotCallbackAnswerRequest
     TELEGRAM_AVAILABLE = True
 except ImportError:
     TELEGRAM_AVAILABLE = False
@@ -77,6 +78,7 @@ class TgMusicSites(_PluginBase):
     _TG_SITE_ID = -1
     _TG_SITE_NAME = "TG音乐"
     _TG_URL_PREFIX = "tg://music/"
+    _TG_MAGNET_MARKER = "tgmusic-"  # magnet 伪链中的 uid 标记，用于 MP 下载链识别
 
     # Telethon 常驻线程与事件循环
     _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -173,6 +175,8 @@ class TgMusicSites(_PluginBase):
         finally:
             loop.close()
             self._loop = None
+            if self._loop_thread is threading.current_thread():
+                self._loop_thread = None
 
     def _build_proxy(self) -> Optional[Tuple[str, str, int]]:
         """构建 Telethon 代理配置（从 data 读取，默认 socks5://127.0.0.1:7891）。"""
@@ -720,11 +724,23 @@ class TgMusicSites(_PluginBase):
 
     def stop_service(self) -> None:
         """停止插件后台服务并释放资源。"""
+        # 停止旧 worker 线程（必须在启动新线程前完成，否则 _start_telegram_worker 会因旧线程存活而跳过）
+        old_thread = self._loop_thread
+        old_loop = self._loop
+        if old_loop and not old_loop.is_closed():
+            try:
+                old_loop.call_soon_threadsafe(old_loop.stop)
+            except Exception:
+                pass
+        if old_thread and old_thread.is_alive():
+            old_thread.join(timeout=5)
+        self._loop_thread = None
+        self._loop = None
         # 断开 Telethon client（在专用 loop 内）
-        if self._client and self._loop and not self._loop.is_closed():
+        if self._client and old_loop and not old_loop.is_closed():
             try:
                 client = self._client
-                loop = self._loop
+                loop = old_loop
                 def _close():
                     try:
                         loop.run_until_complete(client.disconnect())
@@ -1172,8 +1188,12 @@ class TgMusicSites(_PluginBase):
         keyword: str,
         mtype: Optional[MediaType] = None,
         page: Optional[int] = 0,
+        site: Optional[Any] = None,
     ) -> List[Any]:
-        """胁持 search_torrents：仅处理音乐类型。"""
+        """胁持 search_torrents：仅处理音乐类型。
+
+        site 参数为兼容 MP 调用（站点插件都带 site），TG 搜索不使用该参数。
+        """
         if mtype != MediaType.MUSIC:
             return []
         if not self._should_trigger_tg_search(keyword):
@@ -1185,6 +1205,7 @@ class TgMusicSites(_PluginBase):
         keyword: str,
         mtype: Optional[MediaType] = None,
         page: Optional[int] = 0,
+        site: Optional[Any] = None,
     ) -> List[Any]:
         """胁持 async_search_torrents：异步版本。"""
         if mtype != MediaType.MUSIC:
@@ -1311,22 +1332,28 @@ class TgMusicSites(_PluginBase):
                     entries.append({"index": int(m.group(1)), "title": title})
         if not entries:
             return []
-        # 提取按钮数据（reply_markup）
-        button_data = ""
-        button_text = ""
+        # 提取按钮数据（reply_markup）——按条目序号取对应按钮，保证每条结果 uid 唯一
+        buttons = []
         try:
             if msg.reply_markup and msg.reply_markup.rows:
-                row = msg.reply_markup.rows[0]
-                if row.buttons:
-                    btn = row.buttons[0]
-                    button_data = getattr(btn, "data", b"") or b""
-                    if isinstance(button_data, bytes):
-                        button_data = base64.b64encode(button_data).decode()
-                    button_text = getattr(btn, "text", "") or ""
+                for row in msg.reply_markup.rows:
+                    for btn in row.buttons:
+                        buttons.append(btn)
         except Exception:
             pass
         results = []
         for e in entries:
+            # 优先取与序号对应的按钮（index 从 1 开始），按钮不足时退化为第一个
+            btn = buttons[e["index"] - 1] if 0 < e["index"] <= len(buttons) else (buttons[0] if buttons else None)
+            button_data = ""
+            button_text = ""
+            if btn is not None:
+                raw = getattr(btn, "data", b"") or b""
+                if isinstance(raw, bytes):
+                    button_data = base64.b64encode(raw).decode()
+                else:
+                    button_data = str(raw)
+                button_text = getattr(btn, "text", "") or ""
             results.append({
                 "index": e["index"],
                 "title": e["title"],
@@ -1338,31 +1365,42 @@ class TgMusicSites(_PluginBase):
         return results
 
     def _results_to_torrents(self, results: List[Dict[str, Any]]) -> List[Any]:
-        """将 TG 搜索结果转换为 TorrentInfo 列表。"""
-        from app.schemas.context import TorrentInfo
+        """将 TG 搜索结果转换为 TorrentInfo 列表。
+
+        注意：必须用 app.core.context.TorrentInfo（有 to_dict 的普通类），
+        MP 搜索链（chain/search.py -> api/endpoints/search.py）会对结果统一
+        调用 torrent_info.to_dict()；app.schemas.context.TorrentInfo 是
+        pydantic BaseModel 没有 to_dict，会抛 AttributeError。
+        """
+        from app.core.context import TorrentInfo
         torrents = []
         for r in results:
             button_data = r.get("button_data") or ""
             msg_id = r.get("msg_id") or 0
             # 构造唯一标识作为 enclosure
             uid = hashlib.md5(f"{msg_id}:{button_data}".encode()).hexdigest()[:16]
-            torrent = TorrentInfo(
-                site=self._TG_SITE_ID,
-                site_name=self._TG_SITE_NAME,
-                site_order=0,
-                site_proxy=True,
-                title=r.get("title") or "",
-                description=r.get("description") or "",
-                enclosure=f"{self._TG_URL_PREFIX}{uid}",
-                size=0.0,
-                seeders=0,
-                peers=0,
-                grabs=0,
-                pubdate=time.strftime("%Y-%m-%d %H:%M:%S"),
-                category=MediaType.MUSIC.value,
-                labels=["TG音乐"],
-                page_url=f"https://t.me/{r.get('bot_username') or ''}" if r.get("bot_username") else "",
+            # enclosure 用 magnet 伪链：MP download_torrent 对 magnet: 前缀直接返回该字符串，
+            # 不会尝试打开 tg:// 链接；后续 self.download() -> run_module("download") 由
+            # 本插件 tg_download 拦截识别 tgmusic-{uid} 标记，反查缓存触发真实 TG 下载。
+            torrent = TorrentInfo()
+            torrent.site = self._TG_SITE_ID
+            torrent.site_name = self._TG_SITE_NAME
+            torrent.site_order = 0
+            torrent.site_proxy = True
+            torrent.title = r.get("title") or ""
+            torrent.description = r.get("description") or ""
+            torrent.enclosure = (
+                f"magnet:?xt=urn:btih:{uid}{'0' * 24}"
+                f"&dn={self._TG_MAGNET_MARKER}{uid}"
             )
+            torrent.size = 0.0
+            torrent.seeders = 0
+            torrent.peers = 0
+            torrent.grabs = 0
+            torrent.pubdate = time.strftime("%Y-%m-%d %H:%M:%S")
+            torrent.category = MediaType.MUSIC.value
+            torrent.labels = ["TG音乐"]
+            torrent.page_url = f"https://t.me/{r.get('bot_username') or ''}" if r.get("bot_username") else ""
             torrents.append(torrent)
         return torrents
 
@@ -1379,7 +1417,19 @@ class TgMusicSites(_PluginBase):
         downloader: Optional[str] = None,
     ) -> Optional[Tuple[Optional[str], Optional[str], Optional[str], str]]:
         """胁持 download：当下载 TG 资源时走 Telethon 下载。"""
-        # 只处理 TG 链接
+        # 只处理 TG magnet 伪链（含 tgmusic-{uid} 标记）
+        if (
+            isinstance(content, str)
+            and content.startswith("magnet:?")
+            and self._TG_MAGNET_MARKER in content
+        ):
+            logger.info(f"TG音乐站点：开始下载 TG 资源 {content[:60]}...")
+            try:
+                return self._tg_download_file(content, download_dir)
+            except Exception as e:
+                logger.error(f"TG音乐站点下载失败: {str(e)}")
+                return None, None, None, f"TG下载失败: {str(e)}"
+        # 兼容旧 tg://music/ 格式（历史缓存）
         if isinstance(content, str) and content.startswith(self._TG_URL_PREFIX):
             logger.info(f"TG音乐站点：开始下载 TG 资源 {content}")
             try:
@@ -1396,8 +1446,11 @@ class TgMusicSites(_PluginBase):
         """执行 TG bot 文件下载（Telethon 直连）。"""
         if not self._client_ready or not self._client:
             return None, None, None, "TG 未登录"
-        # 从 enclosure 反查缓存的结果
-        uid = enclosure.replace(self._TG_URL_PREFIX, "")
+        # 从 enclosure 反查缓存的结果（支持 magnet 伪链与旧 tg:// 格式）
+        if self._TG_MAGNET_MARKER in enclosure:
+            uid = enclosure.split(self._TG_MAGNET_MARKER, 1)[1][:16]
+        else:
+            uid = enclosure.replace(self._TG_URL_PREFIX, "")
         result = None
         with self._search_lock:
             for r in self._last_search_results:
@@ -1446,8 +1499,9 @@ class TgMusicSites(_PluginBase):
                         msg_id=msg_id,
                         data=button_data,
                     ))
+                    logger.info(f"TG音乐站点：已点击按钮 msg_id={msg_id} 触发下载")
                 except Exception as e:
-                    logger.debug(f"TG音乐站点：点击按钮回调忽略（部分 bot 无回调）: {e}")
+                    logger.info(f"TG音乐站点：点击按钮回调忽略（可能无需点击）: {e}")
             # 轮询 bot 发来的新文件消息
             Path(target_dir).mkdir(parents=True, exist_ok=True)
             deadline = time.time() + self._download_timeout
@@ -1458,40 +1512,57 @@ class TgMusicSites(_PluginBase):
                 try:
                     if bot_entity:
                         messages = await client.get_messages(bot_entity, limit=10)
+                        newest_id = messages[0].id if messages else 0
                         for m in messages:
+                            if m.out:
+                                continue
                             if m.id <= last_id:
                                 continue
                             last_id = max(last_id, m.id)
                             if m.media:
                                 fname = self._media_filename(m)
-                                if fname:
+                                logger.info(f"TG音乐站点：发现新媒体消息 id={m.id} name={fname}")
+                                try:
                                     path = await client.download_media(m, file=target_dir)
-                                    if path:
-                                        file_path = str(path)
-                                        # 无后缀补 .mp3
-                                        if not Path(file_path).suffix:
-                                            new_path = f"{file_path}.mp3"
-                                            Path(file_path).rename(new_path)
-                                            file_path = new_path
-                                        return file_path
+                                except Exception as e:
+                                    logger.info(f"TG音乐站点：download_media 失败: {e}")
+                                    continue
+                                if path:
+                                    file_path = str(path)
+                                    # 无后缀补 .mp3
+                                    if not Path(file_path).suffix:
+                                        new_path = f"{file_path}.mp3"
+                                        Path(file_path).rename(new_path)
+                                        file_path = new_path
+                                    return file_path
+                        logger.info(f"TG音乐站点：轮询中 已扫 {len(messages)} 条 最新id={newest_id} last_id={last_id} 剩余{int(deadline-time.time())}s")
                 except Exception as e:
                     logger.debug(f"TG音乐站点：下载轮询异常: {e}")
+            logger.info(f"TG音乐站点：轮询超时未获取到文件")
             return file_path or None
         except Exception as e:
             logger.error(f"TG音乐站点：_do_download 异常: {e}")
             return None
 
     def _media_filename(self, m: Any) -> str:
-        """提取媒体文件名。"""
+        """提取媒体文件名（兼容 document/audio/voice/photo）。"""
         try:
-            if m.media and hasattr(m.media, "document"):
-                doc = m.media.document
-                for attr in doc.attributes:
-                    if hasattr(attr, "file_name") and attr.file_name:
-                        return attr.file_name
-                return f"tg_music_{m.id}"
-            elif m.media and hasattr(m.media, "photo"):
-                return f"tg_music_{m.id}.jpg"
+            # Telethon .file 属性优先（含 name 与 mime_type）
+            if m.file and m.file.name:
+                return str(m.file.name)
+            if m.media:
+                if hasattr(m.media, "document") and m.media.document:
+                    doc = m.media.document
+                    for attr in doc.attributes:
+                        if hasattr(attr, "file_name") and attr.file_name:
+                            return str(attr.file_name)
+                    # 无文件名：audio/voice 用 id 兜底，带后缀优先
+                    for attr in doc.attributes:
+                        if hasattr(attr, "title") and attr.title:
+                            return f"tg_music_{m.id}.mp3"
+                    return f"tg_music_{m.id}.mp3"
+                if hasattr(m.media, "photo") and m.media.photo:
+                    return f"tg_music_{m.id}.jpg"
         except Exception:
             pass
         return ""
