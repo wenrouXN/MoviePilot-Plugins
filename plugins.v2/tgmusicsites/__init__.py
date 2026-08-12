@@ -266,6 +266,13 @@ class TgMusicSites(_PluginBase):
                 "description": "查询/添加/删除 TG 音乐 Bot（含自定义搜索命令）",
             },
             {
+                "path": "/cleanup",
+                "endpoint": self.api_cleanup,
+                "methods": ["POST"],
+                "summary": "清空插件数据",
+                "description": "卸载前调用：删除全部 Bot 站点与连接状态数据（plugindata），不删除插件本身",
+            },
+            {
                 "path": "/search",
                 "endpoint": self.api_try_search,
                 "methods": ["POST"],
@@ -705,6 +712,75 @@ class TgMusicSites(_PluginBase):
                     {
                         "component": "VCardTitle",
                         "props": {"class": "text-subtitle-1 font-weight-bold"},
+                        "text": "添加 Bot 站点",
+                    },
+                    {
+                        "component": "VCardText",
+                        "props": {"class": "py-2"},
+                        "content": [
+                            {
+                                "component": "div",
+                                "props": {"class": "text-body-2 text-grey pb-2"},
+                                "text": "手动添加 Telegram 音乐 Bot 作为搜索站点（支持多个 Bot）",
+                            },
+                            {
+                                "component": "VTextField",
+                                "props": {
+                                    "model": "new_bot_username",
+                                    "label": "Bot 用户名",
+                                    "placeholder": "music_v1bot",
+                                    "hint": "不带 @ 前缀",
+                                },
+                            },
+                            {
+                                "component": "VTextField",
+                                "props": {
+                                    "model": "new_bot_name",
+                                    "label": "显示名称",
+                                    "placeholder": "音乐机器人",
+                                    "hint": "留空默认 Bot 用户名",
+                                },
+                            },
+                            {
+                                "component": "VTextField",
+                                "props": {
+                                    "model": "new_bot_command",
+                                    "label": "搜索命令",
+                                    "placeholder": "/search {keyword}",
+                                    "hint": "{keyword} 会被替换为搜索词",
+                                },
+                            },
+                            {
+                                "component": "VBtn",
+                                "props": {
+                                    "color": "primary",
+                                    "variant": "tonal",
+                                    "prepend-icon": "mdi-plus",
+                                },
+                                "text": "添加 Bot",
+                                "events": {
+                                    "click": {
+                                        "api": "plugin/TgMusicSites/bots",
+                                        "method": "post",
+                                        "params": {
+                                            "bot_username": "new_bot_username",
+                                            "name": "new_bot_name",
+                                            "search_command": "new_bot_command",
+                                        },
+                                    }
+                                },
+                            },
+                        ],
+                    },
+                ],
+            },
+            {
+                "component": "VCard",
+                "props": {"variant": "outlined", "class": "mt-2"},
+                "content": [
+                    {
+                        "component": "VCardTitle",
+                        "props": {"class": "text-subtitle-1 font-weight-bold"},
                         "text": "Bot 列表",
                     },
                     {
@@ -714,8 +790,29 @@ class TgMusicSites(_PluginBase):
                             {
                                 "component": "div",
                                 "props": {"class": "text-body-2 text-grey"},
-                                "text": "暂无 Bot，请在插件配置页填写 bot_username 或通过 API 添加",
+                                "text": "暂无 Bot，请在上方添加",
                             }
+                        ],
+                    },
+                    {
+                        "component": "VCardActions",
+                        "props": {"class": "pt-0"},
+                        "content": [
+                            {
+                                "component": "VBtn",
+                                "props": {
+                                    "color": "error",
+                                    "variant": "tonal",
+                                    "prepend-icon": "mdi-delete-sweep",
+                                },
+                                "text": "清空插件数据（卸载前）",
+                                "events": {
+                                    "click": {
+                                        "api": "plugin/TgMusicSites/cleanup",
+                                        "method": "post",
+                                    }
+                                },
+                            },
                         ],
                     },
                 ],
@@ -1095,6 +1192,27 @@ class TgMusicSites(_PluginBase):
                 self.save_data("tg_bots", bots)
                 return {"success": True, "data": bots}
             return {"success": False, "message": f"Bot {bot_id} 不存在"}
+
+    async def api_cleanup(self, request: Request) -> Dict[str, Any]:
+        """清空插件数据（卸载前调用）。
+
+        删除 tg_bots / tg_conn_status 等全部插件数据。
+        注意：MP 卸载非分身插件时不自动删除 plugindata，
+        卸载前应先调用本接口，或卸载后运行清理脚本。
+        """
+        cleared = []
+        for key in ["tg_bots", "tg_conn_status"]:
+            try:
+                self.del_data(key)
+                cleared.append(key)
+            except Exception as e:
+                logger.error(f"TG音乐站点：清理数据 {key} 失败: {e}")
+        # 内存态同步清理
+        self._last_search_results = []
+        self._client_ready = False
+        self._login_state = "idle"
+        logger.info(f"TG音乐站点：插件数据已清空: {cleared}")
+        return {"success": True, "message": f"已清空插件数据: {', '.join(cleared) or '无'}", "cleared": cleared}
 
     # ==================== 试搜索 API ====================
 
