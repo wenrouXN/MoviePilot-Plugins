@@ -245,6 +245,7 @@ class TgMusicSites(_PluginBase):
                 "methods": ["GET"],
                 "summary": "查询 TG 登录状态",
                 "description": "轮询登录状态：idle/qr_waiting/qr_scanned/code_sent/2fa_required/logged_in/error",
+                "allow_anonymous": True,
             },
             {
                 "path": "/login/logout",
@@ -266,6 +267,7 @@ class TgMusicSites(_PluginBase):
                 "methods": ["POST"],
                 "summary": "Web 试搜索",
                 "description": "在 Web 页面试搜索歌曲（选 Bot + 关键词）",
+                "allow_anonymous": True,
             },
             {
                 "path": "/test",
@@ -273,6 +275,7 @@ class TgMusicSites(_PluginBase):
                 "methods": ["GET"],
                 "summary": "测试 TG 连接",
                 "description": "测试 Telethon 连接状态",
+                "allow_anonymous": True,
             },
         ]
 
@@ -763,7 +766,7 @@ class TgMusicSites(_PluginBase):
                 self._login_phone = phone
                 self._phone_code_hash = result.phone_code_hash
                 self._login_state = "code_sent"
-            await self._submit(_send(), timeout=40)
+            self._submit(_send(), timeout=40)
             return {"success": True, "state": "code_sent", "message": f"验证码已发送至 {phone}，请在 Telegram 内查看"}
         except Exception as e:
             self._login_state = "error"
@@ -789,8 +792,8 @@ class TgMusicSites(_PluginBase):
                     code=code,
                     phone_code_hash=self._phone_code_hash,
                 )
-            await self._submit(_sign(), timeout=40)
-            me = await self._submit(self._client.get_me(), timeout=30)
+            self._submit(_sign(), timeout=40)
+            me = self._submit(self._client.get_me(), timeout=30)
             session_str = StringSession.save(self._client.session)
             self.save_data("tg_session", session_str)
             self._client_ready = True
@@ -826,8 +829,8 @@ class TgMusicSites(_PluginBase):
         try:
             async def _sign():
                 await self._client.sign_in(password=password)
-            await self._submit(_sign(), timeout=40)
-            me = await self._submit(self._client.get_me(), timeout=30)
+            self._submit(_sign(), timeout=40)
+            me = self._submit(self._client.get_me(), timeout=30)
             session_str = StringSession.save(self._client.session)
             self.save_data("tg_session", session_str)
             self._client_ready = True
