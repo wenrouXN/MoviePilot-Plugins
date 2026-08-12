@@ -681,6 +681,27 @@ class TgMusicSites(_PluginBase):
                 }
             ]
         # Bot 列表行
+        # Bot 状态行（只读，状态面板展示）
+        status_rows = []
+        for k, v in bots.items():
+            cmd = v.get("search_command") or "/search {keyword}"
+            status_rows.append({
+                "component": "div",
+                "props": {"class": "d-flex align-center justify-space-between py-1"},
+                "content": [
+                    {
+                        "component": "div",
+                        "props": {"class": "text-body-2"},
+                        "text": f"{v.get('name', 'TG音乐')} (@{v.get('bot_username', '')}) 命令: {cmd}",
+                    },
+                    {
+                        "component": "VChip",
+                        "props": {"color": "success", "size": "small", "variant": "tonal"},
+                        "text": "✅ 已配置",
+                    },
+                ],
+            })
+        # Bot 管理行（管理面板，带检测/删除按钮）
         bot_rows = []
         for k, v in bots.items():
             cmd = v.get("search_command") or "/search {keyword}"
@@ -694,25 +715,47 @@ class TgMusicSites(_PluginBase):
                         "text": f"{v.get('name', 'TG音乐')} (@{v.get('bot_username', '')}) 命令: {cmd}",
                     },
                     {
-                        "component": "VBtn",
-                        "props": {
-                            "color": "error",
-                            "variant": "tonal",
-                            "size": "x-small",
-                            "prepend-icon": "mdi-delete",
-                        },
-                        "text": "删除",
-                        "events": {
-                            "click": {
-                                "api": "plugin/TgMusicSites/bots",
-                                "method": "delete",
-                                "params": {"bot_id": k},
-                            }
-                        },
+                        "component": "div",
+                        "props": {"class": "d-flex align-center"},
+                        "content": [
+                            {
+                                "component": "VBtn",
+                                "props": {
+                                    "color": "primary",
+                                    "variant": "tonal",
+                                    "size": "x-small",
+                                    "prepend-icon": "mdi-radar",
+                                },
+                                "text": "检测",
+                                "events": {
+                                    "click": {
+                                        "api": "plugin/TgMusicSites/test",
+                                        "method": "get",
+                                    }
+                                },
+                            },
+                            {
+                                "component": "VBtn",
+                                "props": {
+                                    "color": "error",
+                                    "variant": "tonal",
+                                    "size": "x-small",
+                                    "prepend-icon": "mdi-delete",
+                                    "class": "ml-2",
+                                },
+                                "text": "删除",
+                                "events": {
+                                    "click": {
+                                        "api": "plugin/TgMusicSites/bots",
+                                        "method": "delete",
+                                        "params": {"bot_id": k},
+                                    }
+                                },
+                            },
+                        ],
                     },
                 ],
             })
-        # 下载历史行（含真实大小/时长/专辑）
         history = self.get_data("tg_download_history") or []
         if not isinstance(history, list):
             history = []
@@ -856,7 +899,7 @@ class TgMusicSites(_PluginBase):
                                 "props": {"class": "text-subtitle-1 font-weight-bold"},
                                 "content": [
                                     {"component": "span", "text": "📊 状态"},
-                                    {"component": "span", "props": {"class": "ml-2 text-caption text-grey"}, "text": "登录状态与连接"},
+                                    {"component": "span", "props": {"class": "ml-2 text-caption text-grey"}, "text": "登录状态与 Bot 可用状态"},
                                 ],
                             },
                             {
@@ -946,7 +989,31 @@ class TgMusicSites(_PluginBase):
               ],
               },
           ],
-          }
+          },
+
+                {
+                  "component": "VCard",
+                  "props": {"variant": "tonal", "color": "secondary", "class": "mt-2"},
+                  "content": [
+                    {
+                      "component": "VCardTitle",
+                      "props": {"class": "text-subtitle-1 font-weight-bold"},
+                      "text": "🤖 Bot 可用状态",
+                    },
+                    {
+                      "component": "VCardText",
+                      "props": {"class": "py-2"},
+                      "content": status_rows or [
+                        {
+                          "component": "div",
+                          "props": {"class": "text-body-2 text-grey"},
+                          "text": "暂无 Bot，请在管理面板添加",
+                        }
+                      ],
+                    },
+                  ],
+                }
+
 ,
                         
                                 ],
@@ -960,8 +1027,8 @@ class TgMusicSites(_PluginBase):
                                 "component": "VExpansionPanelTitle",
                                 "props": {"class": "text-subtitle-1 font-weight-bold"},
                                 "content": [
-                                    {"component": "span", "text": "🔌 站点"},
-                                    {"component": "span", "props": {"class": "ml-2 text-caption text-grey"}, "text": "添加 Bot、试搜索与站点列表"},
+                                    {"component": "span", "text": "🔧 管理"},
+                                    {"component": "span", "props": {"class": "ml-2 text-caption text-grey"}, "text": "添加 Bot、试搜索、检测与删除"},
                                 ],
                             },
                             {
