@@ -289,6 +289,13 @@ class TgMusicSites(_PluginBase):
                 "description": "测试 Telethon 连接状态",
                 "allow_anonymous": True,
             },
+            {
+                "path": "/history",
+                "endpoint": self.api_history,
+                "methods": ["GET"],
+                "summary": "下载历史记录",
+                "description": "获取插件下载历史（含真实大小/时长/专辑等）",
+            },
         ]
 
     def get_module(self) -> Dict[str, Any]:
@@ -472,6 +479,35 @@ class TgMusicSites(_PluginBase):
                                 "params": {"bot_id": k},
                             }
                         },
+                    },
+                ],
+            })
+        # 下载历史行（含真实大小/时长/专辑）
+        history = self.get_data("tg_download_history") or []
+        if not isinstance(history, list):
+            history = []
+        history_rows = []
+        for h in history:
+            size_txt = h.get("size_text") or (
+                f"{h['size'] / 1024 / 1024:.1f}MB" if h.get("size") else ""
+            )
+            dur_txt = f"{h['duration']}s" if h.get("duration") else ""
+            album_txt = h.get("album") or ""
+            meta = " · ".join(x for x in [size_txt, dur_txt, album_txt] if x)
+            title = h.get("title") or h.get("file_name") or ""
+            history_rows.append({
+                "component": "div",
+                "props": {"class": "d-flex align-center justify-space-between py-1"},
+                "content": [
+                    {
+                        "component": "div",
+                        "props": {"class": "text-body-2"},
+                        "text": f"{h.get('time', '')} {title}",
+                    },
+                    {
+                        "component": "div",
+                        "props": {"class": "text-caption text-grey"},
+                        "text": meta,
                     },
                 ],
             })
@@ -814,6 +850,30 @@ class TgMusicSites(_PluginBase):
                                     }
                                 },
                             },
+                        ],
+                    },
+                ],
+            },
+            {
+                "component": "VCard",
+                "props": {"variant": "tonal", "class": "mt-2"},
+                "content": [
+                    {
+                        "component": "VCardTitle",
+                        "props": {"class": "text-subtitle-1 font-weight-bold"},
+                        "text": "📥 下载历史",
+                    },
+                    {
+                        "component": "VCardText",
+                        "props": {"class": "pt-0"},
+                        "content": history_rows
+                        if history_rows
+                        else [
+                            {
+                                "component": "div",
+                                "props": {"class": "text-body-2 text-grey"},
+                                "text": "暂无下载记录",
+                            }
                         ],
                     },
                 ],
@@ -1270,6 +1330,16 @@ class TgMusicSites(_PluginBase):
         except Exception as e:
             return {"success": False, "message": f"连接失败: {str(e)}"}
 
+    async def api_history(self) -> Dict[str, Any]:
+        """获取下载历史记录（含真实大小/时长/专辑等元数据）。"""
+        try:
+            history = self.get_data("tg_download_history") or []
+            if not isinstance(history, list):
+                history = []
+            return {"success": True, "count": len(history), "data": history}
+        except Exception as e:
+            return {"success": False, "message": f"获取下载历史失败: {str(e)}", "data": []}
+
     @staticmethod
     def _connect_test(client: Any) -> bool:
         """测试连接（同步包装）。"""
@@ -1599,6 +1669,22 @@ class TgMusicSites(_PluginBase):
             )
             if not file_path:
                 return None, None, None, "TG 下载失败：未获取到文件"
+            # 记录下载历史（含真实大小/时长/专辑等元数据）
+            try:
+                history = self.get_data("tg_download_history") or []
+                if not isinstance(history, list):
+                    history = []
+                info = dict(self._last_download_info or {})
+                info.update({
+                    "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "title": result.get("title") or "",
+                    "bot_username": result.get("bot_username") or "",
+                })
+                history.insert(0, info)
+                # 最多保留 50 条
+                self.save_data("tg_download_history", history[:50])
+            except Exception as e:
+                logger.warning(f"TG音乐站点：记录下载历史失败: {e}")
             fake_hash = hashlib.md5(str(file_path).encode()).hexdigest()[:40]
             logger.info(f"TG音乐站点：文件已下载到 {file_path}")
             return "TGMusic", fake_hash, "NoSubfolder", ""
