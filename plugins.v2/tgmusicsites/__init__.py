@@ -58,7 +58,7 @@ class TgMusicSites(_PluginBase):
     plugin_name = "TG音乐站点"
     plugin_desc = "将 Telegram 音乐 Bot 作为音乐资源站点接入 MoviePilot V3 搜索链。支持 Web 页面扫码登录、多 Bot 管理与自定义搜索命令。"
     plugin_icon = "Telegram_A.png"
-    plugin_version = "0.3.0"
+    plugin_version = "0.3.1"
     plugin_label = "音乐,Telegram,资源站"
     plugin_author = "wenrouXN"
     plugin_config_prefix = "tgmusicsites_"

@@ -1123,7 +1123,7 @@
     "name": "TG音乐站点",
     "description": "将 Telegram 音乐 Bot 作为音乐资源站点接入 MoviePilot V3 搜索链。支持 Web 页面扫码登录、多 Bot 管理与自定义搜索命令。",
     "labels": "音乐,Telegram,资源站",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "icon": "Telegram_A.png",
     "author": "wenrouXN",
     "level": 1,
@@ -1131,7 +1131,8 @@
     "history": {
       "v0.1.0": "初始版本：TG bot 站点接入 V3 音乐搜索链",
       "v0.2.0": "TG 通信层抽离为 tg-music-bridge 独立服务，插件瘦身为纯 API 客户端（无需 Telethon/代理/会话配置）",
-      "v0.3.0": "Telethon 内嵌 + Web 扫码登录（NextFind 式）+ 多 Bot 管理与自定义搜索命令 + Web 试搜索"
+      "v0.3.0": "Telethon 内嵌 + Web 扫码登录（NextFind 式）+ 多 Bot 管理与自定义搜索命令 + Web 试搜索",
+      "v0.3.1": "UI 重构：设置页 VTabs 三 tab（基础/下载/代理）+ 详情页手风琴分块（状态/站点/记录）+ 插件日志卡片"
     }
   }
 }
