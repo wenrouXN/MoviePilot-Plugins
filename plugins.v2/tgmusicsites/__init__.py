@@ -101,6 +101,7 @@ class TgMusicSites(_PluginBase):
     _last_search_key = ""
     _last_search_time = 0.0
     _last_search_results: List[Dict[str, Any]] = []
+    _last_download_info: Dict[str, Any] = {}
 
     def init_plugin(self, config: dict = None) -> None:
         """根据插件配置初始化运行状态。"""
@@ -1434,6 +1435,16 @@ class TgMusicSites(_PluginBase):
             logger.error(f"TG音乐站点：@{bot_username} 搜索异常: {e}")
             return []
 
+    @staticmethod
+    def _clean_title(raw: str) -> str:
+        """清洗搜索结果标题：去尾部标点/分隔符噪声与重复空格。"""
+        t = raw.strip()
+        # 去掉尾部连续的标点/分隔符（、。.．-—_—/\\| 空格等）
+        t = re.sub(r"[、。.．，,;；:：!！?？\-—_—/\\|\s]+$", "", t)
+        # 压缩内部连续空格
+        t = re.sub(r"\s{2,}", " ", t)
+        return t.strip()
+
     def _parse_result_message(self, msg: Any) -> List[Dict[str, Any]]:
         """解析 Bot 搜索结果消息，提取候选与按钮数据。"""
         text = (msg.message or "").strip()
@@ -1445,7 +1456,7 @@ class TgMusicSites(_PluginBase):
             line = line.strip()
             m = re.match(r"^(\d+)[.、．]\s*(.+)$", line)
             if m:
-                title = m.group(2).strip()
+                title = self._clean_title(m.group(2))
                 if title:
                     entries.append({"index": int(m.group(1)), "title": title})
         if not entries:
@@ -1652,6 +1663,16 @@ class TgMusicSites(_PluginBase):
                                         new_path = f"{file_path}.mp3"
                                         Path(file_path).rename(new_path)
                                         file_path = new_path
+                                    # 提取文件元数据（真实大小/时长/专辑/资源ID），供展示与日志
+                                    info = self._extract_file_meta(m)
+                                    info["file_path"] = file_path
+                                    self._last_download_info = info
+                                    logger.info(
+                                        f"TG音乐站点：文件元数据 size={info.get('size')} "
+                                        f"duration={info.get('duration')}s "
+                                        f"album={info.get('album')} "
+                                        f"resource={info.get('resource_id')}"
+                                    )
                                     return file_path
                         logger.info(f"TG音乐站点：轮询中 已扫 {len(messages)} 条 最新id={newest_id} last_id={last_id} 剩余{int(deadline-time.time())}s")
                 except Exception as e:
@@ -1661,6 +1682,41 @@ class TgMusicSites(_PluginBase):
         except Exception as e:
             logger.error(f"TG音乐站点：_do_download 异常: {e}")
             return None
+
+    def _extract_file_meta(self, m: Any) -> Dict[str, Any]:
+        """提取文件消息元数据：真实大小/时长/专辑/资源ID/文件名。"""
+        meta: Dict[str, Any] = {}
+        try:
+            # 真实大小与 mime（document）
+            if m.media and hasattr(m.media, "document") and m.media.document:
+                doc = m.media.document
+                meta["size"] = doc.size
+                meta["mime"] = doc.mime_type
+                for a in doc.attributes:
+                    name = type(a).__name__
+                    if name == "DocumentAttributeAudio":
+                        meta["duration"] = getattr(a, "duration", 0)
+                        if getattr(a, "title", None):
+                            meta["audio_title"] = a.title
+                        if getattr(a, "performer", None):
+                            meta["performer"] = a.performer
+                    elif name == "DocumentAttributeFilename":
+                        if getattr(a, "file_name", None):
+                            meta["file_name"] = a.file_name
+            # 文本里补专辑/资源ID："专辑：不散" / "大小：18.74MB" / "音乐ID：网易云音乐3339230677"
+            text = (m.message or "") or ""
+            m_album = re.search(r"专辑[：:](\S+)", text)
+            if m_album:
+                meta["album"] = m_album.group(1).strip()
+            m_size = re.search(r"大小[：:]([0-9.]+\s*[KMGT]?B)", text, re.IGNORECASE)
+            if m_size:
+                meta["size_text"] = m_size.group(1)
+            m_res = re.search(r"音乐ID[^：:\n]*[：:]\s*([\u4e00-\u9fa5A-Za-z0-9]+)", text)
+            if m_res:
+                meta["resource_id"] = m_res.group(1).strip()
+        except Exception:
+            pass
+        return meta
 
     def _media_filename(self, m: Any) -> str:
         """提取媒体文件名（兼容 document/audio/voice/photo）。"""

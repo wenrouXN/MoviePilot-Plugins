@@ -140,3 +140,41 @@ def test_stop_service_clears_worker_state():
     assert plugin._login_state == "idle"
     # stop 后应能重新启动 worker（不真启线程，验证不再被旧线程挡住）
     assert plugin._loop_thread is None
+
+
+def test_clean_title():
+    """标题清洗：去尾部噪声保留内部分隔符。"""
+    from tgmusicsites import TgMusicSites
+    assert TgMusicSites._clean_title("晴天 周杰伦- A-LNK") == "晴天 周杰伦- A-LNK"
+    assert TgMusicSites._clean_title("晴天 B-KLl 周杰伦、") == "晴天 B-KLl 周杰伦"
+    assert TgMusicSites._clean_title("晴天 周杰伦- ") == "晴天 周杰伦"
+    assert TgMusicSites._clean_title("  七里香  ") == "七里香"
+
+
+def test_extract_file_meta():
+    """文件消息元数据提取：大小/时长/专辑/资源ID/文件名。"""
+    from tgmusicsites import TgMusicSites
+    class DocumentAttributeAudio:
+        def __init__(s, **kw): s.__dict__.update(kw)
+    class DocumentAttributeFilename:
+        def __init__(s, **kw): s.__dict__.update(kw)
+    class _Doc:
+        size = 19647181
+        mime_type = "audio/x-flac"
+        attributes = [DocumentAttributeAudio(duration=182, title="晴天", performer="周杰伦- A-LNK"),
+                      DocumentAttributeFilename(file_name="晴天-周杰伦- A-LNK.flac")]
+    class _Media:
+        document = _Doc()
+    class _Msg:
+        media = _Media()
+        message = ("歌曲：晴天 - 周杰伦- A-LNK\n专辑：不散\n"
+                   "#网易云音乐 #flac 大小：18.74MB 854.533kbps\n"
+                   "音乐ID(可在内联查询使用)：\n网易云音乐3339230677\n"
+                   "via @music_v1bot")
+    meta = TgMusicSites()._extract_file_meta(_Msg())
+    assert meta["size"] == 19647181
+    assert meta["duration"] == 182
+    assert meta["album"] == "不散"
+    assert meta["size_text"] == "18.74MB"
+    assert meta["resource_id"] == "网易云音乐3339230677"
+    assert meta["file_name"] == "晴天-周杰伦- A-LNK.flac"
