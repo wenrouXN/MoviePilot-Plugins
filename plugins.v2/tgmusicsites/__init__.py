@@ -103,8 +103,96 @@ class TgMusicSites(_PluginBase):
     _last_search_results: List[Dict[str, Any]] = []
     _last_download_info: Dict[str, Any] = {}
 
+    def _handle_form_actions(self, config: dict = None) -> dict:
+        """处理设置页按钮动作（get_form 的 VBtn onClick 表达式写隐藏字段，保存配置时触发）。
+        返回清理后的 config（移除隐藏字段），并写回系统配置避免重复执行。
+        """
+        if not config:
+            return config or {}
+        changed = False
+        action = config.pop("_action", None)
+        add_bot = config.pop("_add_bot", None)
+        del_bot = config.pop("_del_bot", None)
+
+        if action == "logout":
+            changed = True
+            try:
+                self.stop_service()
+                self._login_state = "idle"
+                self._login_qr_image = None
+                self.save_data("tg_session", "")
+                logger.info("TG音乐站点：设置页触发注销登录")
+            except Exception as e:
+                logger.error("TG音乐站点：注销失败: %s", e)
+        elif action == "test":
+            changed = True
+            try:
+                if not TELEGRAM_AVAILABLE:
+                    self.save_data("tg_conn_status", {"success": False, "message": "Telethon 未安装", "time": time.strftime("%m-%d %H:%M:%S")})
+                else:
+                    self._start_telegram_worker()
+                    time.sleep(3)
+                    ok = bool(getattr(self, "_client_ready", False) or self._login_state == "logged_in")
+                    self.save_data("tg_conn_status", {
+                        "success": ok,
+                        "message": "连接成功: " + str(getattr(self, "_login_user", "") or "") if ok else "连接失败",
+                        "time": time.strftime("%m-%d %H:%M:%S"),
+                    })
+            except Exception as e:
+                self.save_data("tg_conn_status", {"success": False, "message": str(e), "time": time.strftime("%m-%d %H:%M:%S")})
+        elif action == "cleanup":
+            changed = True
+            try:
+                self.save_data("tg_bots", {})
+                self.save_data("tg_conn_status", None)
+                self.save_data("tg_session", "")
+                logger.info("TG音乐站点：设置页触发清空数据")
+            except Exception as e:
+                logger.error("TG音乐站点：清空数据失败: %s", e)
+
+        if add_bot:
+            changed = True
+            try:
+                username = str(config.get("new_bot_username") or "").strip().lstrip("@")
+                if username:
+                    bots = self.get_data("tg_bots") or {}
+                    bots[username] = {
+                        "bot_username": username,
+                        "name": str(config.get("new_bot_name") or username).strip(),
+                        "search_command": str(config.get("new_bot_command") or "/search {keyword}").strip(),
+                        "button_index": int(config.get("button_index") or 1),
+                        "enabled": True,
+                        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    self.save_data("tg_bots", bots)
+                    config["new_bot_username"] = ""
+                    config["new_bot_name"] = ""
+                    config["new_bot_command"] = ""
+                    logger.info("TG音乐站点：设置页添加 Bot @%s", username)
+            except Exception as e:
+                logger.error("TG音乐站点：添加 Bot 失败: %s", e)
+
+        if del_bot:
+            changed = True
+            try:
+                bots = self.get_data("tg_bots") or {}
+                bots.pop(del_bot, None)
+                self.save_data("tg_bots", bots)
+                logger.info("TG音乐站点：设置页删除 Bot @%s", del_bot)
+            except Exception as e:
+                logger.error("TG音乐站点：删除 Bot 失败: %s", e)
+
+        if changed:
+            try:
+                self.update_config(config)
+            except Exception:
+                pass
+        return config
+
     def init_plugin(self, config: dict = None) -> None:
         """根据插件配置初始化运行状态。"""
+        # 处理设置页按钮动作（onClick 表达式写入 _action/_add_bot/_del_bot，保存时触发）
+        config = self._handle_form_actions(config)
         self.stop_service()
         self._enabled = False
         if not config:
@@ -375,6 +463,13 @@ class TgMusicSites(_PluginBase):
                             "value": "代理"
                           },
                           "text": "🌐 网络代理"
+                        },
+                        {
+                          "component": "VTab",
+                          "props": {
+                            "value": "Bot"
+                          },
+                          "text": "🤖 Bot 配置"
                         }
                       ]
                     },
@@ -604,7 +699,160 @@ class TgMusicSites(_PluginBase):
                               ]
                             }
                           ]
-                        }
+                        },
+                        {
+                          "component": "VWindowItem",
+                          "props": {
+                            "value": "Bot"
+                          },
+                          "content": [
+                            {
+                              "component": "VCard",
+                              "props": {"variant": "tonal", "class": "mb-2"},
+                              "content": [
+                                {
+                                  "component": "VCardText",
+                                  "content": [
+                                    {
+                                      "component": "div",
+                                      "props": {"class": "text-subtitle-1 font-weight-bold pb-1"},
+                                      "text": "当前 Bot 站点",
+                                    },
+                                  ] + [
+                                    {
+                                      "component": "div",
+                                      "props": {"class": "d-flex align-center justify-space-between py-1"},
+                                      "content": [
+                                        {
+                                          "component": "div",
+                                          "props": {"class": "text-body-2"},
+                                          "text": f"{v.get('name', k)} (@{k})",
+                                        },
+                                        {
+                                          "component": "VBtn",
+                                          "props": {
+                                            "color": "error",
+                                            "variant": "tonal",
+                                            "size": "x-small",
+                                            "prepend-icon": "mdi-delete",
+                                            "onClick": "() => model._del_bot = '%s'" % k,
+                                          },
+                                          "text": "删除",
+                                        },
+                                      ],
+                                    }
+                                    for k, v in (self.get_data("tg_bots") or {}).items()
+                                  ] or [
+                                    {
+                                      "component": "div",
+                                      "props": {"class": "text-body-2 text-grey"},
+                                      "text": "暂无 Bot，请添加",
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                            {
+                              "component": "VCard",
+                              "props": {"variant": "outlined", "class": "mb-2"},
+                              "content": [
+                                {
+                                  "component": "VCardTitle",
+                                  "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                  "text": "添加 Bot",
+                                },
+                                {
+                                  "component": "VCardText",
+                                  "content": [
+                                    {
+                                      "component": "VTextField",
+                                      "props": {
+                                        "model": "new_bot_username",
+                                        "label": "Bot 用户名",
+                                        "placeholder": "music_v1bot",
+                                        "hint": "不带 @ 前缀",
+                                      },
+                                    },
+                                    {
+                                      "component": "VTextField",
+                                      "props": {
+                                        "model": "new_bot_name",
+                                        "label": "显示名称",
+                                        "placeholder": "音乐机器人",
+                                      },
+                                    },
+                                    {
+                                      "component": "VTextField",
+                                      "props": {
+                                        "model": "new_bot_command",
+                                        "label": "搜索命令",
+                                        "placeholder": "/search {keyword}",
+                                      },
+                                    },
+                                    {
+                                      "component": "VBtn",
+                                      "props": {
+                                        "color": "primary",
+                                        "variant": "tonal",
+                                        "prepend-icon": "mdi-plus",
+                                        "onClick": "() => model._add_bot = '1'",
+                                      },
+                                      "text": "添加 Bot",
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                            {
+                              "component": "VCard",
+                              "props": {"variant": "outlined"},
+                              "content": [
+                                {
+                                  "component": "VCardTitle",
+                                  "props": {"class": "text-subtitle-1 font-weight-bold"},
+                                  "text": "操作",
+                                },
+                                {
+                                  "component": "VCardText",
+                                  "content": [
+                                    {
+                                      "component": "VBtn",
+                                      "props": {
+                                        "color": "primary",
+                                        "variant": "tonal",
+                                        "prepend-icon": "mdi-radar",
+                                        "onClick": "() => model._action = 'test'",
+                                      },
+                                      "text": "检测连接",
+                                    },
+                                    {
+                                      "component": "VBtn",
+                                      "props": {
+                                        "color": "error",
+                                        "variant": "tonal",
+                                        "prepend-icon": "mdi-logout",
+                                        "class": "ml-2",
+                                        "onClick": "() => model._action = 'logout'",
+                                      },
+                                      "text": "注销登录",
+                                    },
+                                    {
+                                      "component": "VBtn",
+                                      "props": {
+                                        "color": "error",
+                                        "variant": "tonal",
+                                        "prepend-icon": "mdi-delete-sweep",
+                                        "class": "ml-2",
+                                        "onClick": "() => model._action = 'cleanup'",
+                                      },
+                                      "text": "清空数据",
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                          ],
+                        },
                       ]
                     },
                     {
@@ -629,7 +877,10 @@ class TgMusicSites(_PluginBase):
                 "button_index": 1,
                 "proxy_host": "127.0.0.1",
                 "proxy_port": 7891,
-                "proxy_type": "socks5"
+                "proxy_type": "socks5",
+                "new_bot_username": "",
+                "new_bot_name": "",
+                "new_bot_command": "/search {keyword}"
               }
         ]
 
